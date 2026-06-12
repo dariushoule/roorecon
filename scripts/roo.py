@@ -37,6 +37,17 @@ import threading
 import time
 from pathlib import Path
 
+# Force UTF-8 on our own streams. Windows consoles default to a legacy code
+# page (cp1252), so printing the em-dash/arrow/ellipsis we use in status lines
+# raises UnicodeEncodeError and kills the thread doing it — fatal for the sweep
+# reader thread that streams port discoveries. errors="replace" is a belt-and-
+# suspenders fallback for any glyph the target encoding still can't represent.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass  # not a reconfigurable TextIOWrapper (e.g. already wrapped/closed)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKER_DIR = Path(os.environ.get("ROO_DOCKER_DIR", REPO_ROOT / "docker"))
 IMAGE_PREFIX = "roorecon"
@@ -173,6 +184,17 @@ def _rel_out(out):
     return p
 
 
+def _cpath(p):
+    """POSIX form of a cwd-relative path, for passing as a container argument.
+
+    The tool container is always Linux. str(Path) on Windows yields backslash
+    separators, which a Linux tool treats as literal filename characters — so an
+    -oA/-oN target like recon-results\\host\\tcp lands as one mangled flat file in
+    /work instead of nesting into the directory. as_posix() keeps the slashes.
+    """
+    return Path(p).as_posix()
+
+
 def _docker_run(tool, ref, tool_args, *, name=None, tty=False, stream=False,
                 quiet=False, extra_mounts=None):
     """Build (and optionally launch) a `docker run` for a tool image.
@@ -243,9 +265,9 @@ def cmd_sweep(args):
                 if m:
                     claim(m.group(2), m.group(1))
 
-    # -oA paths are relative so they land under /work (= cwd) in the container.
-    tcp_oa = str((outdir / "tcp"))
-    udp_oa = str((outdir / "udp"))
+    # -oA paths are relative (POSIX) so they land under /work (= cwd) in the container.
+    tcp_oa = _cpath(outdir / "tcp")
+    udp_oa = _cpath(outdir / "udp")
     tcp_proc = _docker_run(
         "nmap", ref,
         ["-v", "-Pn", "-n", "-sS", "-p-", "--min-rate", "1000", "-T4", "-oA", tcp_oa, target],
@@ -333,7 +355,7 @@ def cmd_buckaroo(args):
     scan = ["-sS", "-sCV"] if proto == "tcp" else ["-sU", "-sV"]
 
     info(f"buckaroo on {proto}/{port} @ {target} — focused service scan")
-    nmap_out = str(d / "nmap.txt")
+    nmap_out = _cpath(d / "nmap.txt")
     _docker_run("nmap", ref, ["-Pn", "-n", *scan, f"-p{port}", "-oN", nmap_out, target], quiet=True)
 
     nmap_txt = (d / "nmap.txt").read_text() if (d / "nmap.txt").exists() else ""
@@ -346,7 +368,7 @@ def cmd_buckaroo(args):
         # -sV so service-bound NSE scripts fire on a non-default port.
         _docker_run("nmap", ref,
                     ["-Pn", "-n", "-sV", "--script", nse, f"-p{port}",
-                     "-oN", str(d / "scripts.txt"), target], quiet=True)
+                     "-oN", _cpath(d / "scripts.txt"), target], quiet=True)
         if (d / "scripts.txt").exists():
             scripts_txt = (d / "scripts.txt").read_text()
 
@@ -463,7 +485,7 @@ def cmd_recon(args):
     info(f"Phase 1/2 — full TCP port sweep on {target} (this can take a few minutes)")
     _docker_run("nmap", ref,
                 ["-Pn", "-n", "-sS", "-p-", "--min-rate", "1000", "-T4",
-                 "-oA", str(outdir / "all-ports"), target], quiet=True)
+                 "-oA", _cpath(outdir / "all-ports"), target], quiet=True)
 
     gnmap = outdir / "all-ports.gnmap"
     ports = sorted({m.group(1) for m in
@@ -478,7 +500,7 @@ def cmd_recon(args):
     info("Phase 2/2 — service/version + default scripts on open ports")
     _docker_run("nmap", ref,
                 ["-Pn", "-n", "-sS", "-sCV", "-p", ",".join(ports),
-                 "-oA", str(outdir / "services"), target], quiet=True)
+                 "-oA", _cpath(outdir / "services"), target], quiet=True)
 
     svc_nmap = (outdir / "services.nmap").read_text() if (outdir / "services.nmap").exists() else ""
     svc_lines = [ln for ln in svc_nmap.splitlines() if re.match(r"^\d+/(tcp|udp)\s+open", ln)]

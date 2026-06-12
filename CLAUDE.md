@@ -58,6 +58,16 @@ sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
   for a `.ovpn` in `./vpn/`. If there is none, STOP and ask the user to drop
   their `.ovpn` into `./vpn/` (it's git-ignored) — never attempt to scan a
   VPN-only target without it.
+- **Run exactly one tunnel per `.ovpn` — don't fight the sidecar.** Platforms
+  like HTB/THM allow only a single connection per config. If the user also has a
+  host VPN client (system OpenVPN, the HTB app, Tunnelblick, etc.) connected with
+  the **same** `.ovpn`, it and the sidecar contend for that one slot — the server
+  flaps between them and scans go flaky (ports show `filtered`/closed
+  intermittently, results don't reproduce). If you see that symptom, suspect
+  contention first, not the box. The fix: pick one tunnel. For this containerized
+  flow, prefer the sidecar — have the user disconnect the host client, then
+  `scripts/roo vpn up`. (The host client's tunnel usually doesn't route into the
+  Docker VM anyway, which is why the sidecar exists.)
 - **Note internal IPs.** Record every private/internal IP you encounter — the
   target itself and any internal hosts surfaced in scan output — as pivot
   candidates in your engagement notes.
