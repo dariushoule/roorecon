@@ -15,11 +15,11 @@ the output for you.
 ## Containerized tooling
 
 Every CLI runs inside its own minimal Docker image, so a scan behaves
-identically on Linux, macOS, and Windows — no host installs, no "works on my
-machine." The single entry point is the cross-platform **`roo` CLI**
-(`scripts/roo.py`, stdlib Python): run `scripts/roo` on Unix or `scripts\roo.cmd`
-from PowerShell/cmd. It builds each tool's image on demand and runs it with your
-current directory mounted at `/work`.
+identically on Linux, macOS, and Windows. The single entry point is the 
+cross-platform **`roo` CLI** (`scripts/roo.py`, stdlib Python): run 
+`scripts/roo` on Unix or `scripts\roo.cmd` from PowerShell/cmd. It 
+builds each tool's image on demand and runs it with your current directory 
+mounted at `/work`.
 
 ```bash
 scripts/roo run nmap -sCV -p- 10.10.10.5   # runs nmap in roorecon/nmap
@@ -30,21 +30,17 @@ auto-rebuilds and unchanged tools start instantly.
 
 ## Quick start
 
-```bash
-# Just ask the agent to "recon 10.10.10.5", or drive the CLI directly:
-scripts/roo sweep 10.10.10.5     # streaming parallel discovery (fast path)
-scripts/roo recon 10.10.10.5     # simple one-shot phased scan
-# → results in ./recon-results/10.10.10.5/
+Place an openvpn file in `./vpn/` (if required).
+
+```sh
+claude "Run recon on 10.0.24.44"
 ```
 
 ## What's here
 
 | Skill | What it does | Drives |
 |-------|--------------|--------|
-| `recon` | Maps a target's attack surface. Fast path: streaming parallel TCP+UDP sweep that fires a per-port "buckaroo" deep-dive the moment each port opens. Simple path: a one-shot phased scan. | `roo sweep` + `roo buckaroo`, or `roo recon` |
-
-More skills (web exploitation, pwn/reversing, crypto/forensics) are planned —
-this repo intentionally starts small.
+| `recon` | Maps a target's attack surface. Streaming parallel TCP+UDP sweep fires a per-port "buckaroo" deep-dive the moment each port opens; buckaroos surface hostnames (HTTP redirects, TLS cert CN/SAN) that feed vhost (internal) or DNS subdomain (external) enumeration. | `roo sweep` + `roo buckaroo` + `roo vhost`/`roo dns` |
 
 ## Layout
 
@@ -92,11 +88,7 @@ rules above.
   or OrbStack).
 - **Python 3** — runs the `roo` CLI (stdlib only, no `pip install`).
 
-That's it. The `roo` CLI runs natively from **PowerShell**, cmd, bash, zsh, or
-Git Bash — same behavior everywhere. No host installs of `nmap` etc.; the images
-carry them.
-
-### VPN targets (HTB/THM/OpenVPN)
+### VPN targets
 
 **Just drop your engagement `.ovpn` into `./vpn/`** (git-ignored) and ask the
 agent to recon the box — it brings the tunnel up and routes every tool through
@@ -119,3 +111,13 @@ and it records the mapping — or add it yourself to a git-ignored `./hosts` fil
 
 Either way `roo` mounts it into every tool container, so vhost resolution works
 whether you scan direct or over the VPN.
+
+## Credits
+
+- **Wordlists** — vhost/DNS enumeration uses lists from
+  [SecLists](https://github.com/danielmiessler/SecLists) by Daniel Miessler,
+  Jason Haddix & contributors (MIT-licensed). They're baked into the `gobuster`
+  image at build time; the upstream `LICENSE` ships alongside them in the image
+  at `/wordlists/SecLists-LICENSE`.
+- **Tooling** — [nmap](https://nmap.org), [gobuster](https://github.com/OJ/gobuster),
+  and [OpenVPN](https://openvpn.net), each in its own minimal container.

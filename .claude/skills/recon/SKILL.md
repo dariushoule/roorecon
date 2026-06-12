@@ -84,6 +84,27 @@ Phase 1 finds every open port (full `-p-`), phase 2 runs `-sCV` on just those.
 Always a SYN scan (root inside the container), `-Pn` (CTF hosts often drop
 ping), and safe to re-run.
 
+## Hostname discovery → vhost / subdomain enum
+
+Boxes reveal hostnames you then enumerate further — the classic "IP → `:80`
+redirects to `box.htb` → add to hosts → find `admin.box.htb`" loop.
+
+1. **Discover.** A buckaroo on an http/https port pulls hostnames from the
+   redirect target and the TLS cert (CN/SAN) into `facts.md` ("Discovered
+   hostnames"), and appends them to `recon-results/<target>/hostnames.txt`.
+2. **Add to `./hosts`.** For each name, add `IP name` (e.g. `10.10.10.5 box.htb`)
+   so every tool container resolves it.
+3. **Enumerate more names** — branch on the target:
+   - **Internal IP (RFC1918/VPN)** → vhost fuzz the Host header:
+     `scripts/roo vhost <ip> <domain>` → `recon-results/<ip>/vhosts.txt`.
+   - **External domain** → DNS subdomain brute:
+     `scripts/roo dns <domain>` → `recon-results/<domain>/subdomains.txt`.
+   Both stream hits live and default to a fast wordlist; pass
+   `--wordlist combined_subdomains.txt` (baked, thorough) or
+   `ROO_WORDLIST=<host path>` for a custom list.
+4. **Loop.** Add newly-found names to `./hosts` and re-buckaroo their web ports
+   with the right Host — new vhosts often expose new content and more names.
+
 ## Tooling runs in containers
 
 Every CLI runs in its own minimal Docker image via the cross-platform `roo` CLI

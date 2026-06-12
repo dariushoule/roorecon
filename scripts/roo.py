@@ -9,9 +9,14 @@ macOS, and Windows.
 Subcommands:
   run <tool> [args...]            run a CLI in its container (e.g. run nmap -sCV ...)
   sweep <target>                  streaming parallel TCP+UDP port discovery
-  buckaroo <target> <proto> <port>  per-port enumeration -> facts.md
+  buckaroo <target> <proto> <port>  per-port enum -> facts.md (+ hostname discovery)
+  vhost <ip> <domain>             vhost (Host-header) enum for an internal IP
+  dns <domain>                    DNS subdomain enum for an external domain
   recon <target>                  simple one-shot phased scan
   vpn <up|down|status> [config]   manage the OpenVPN sidecar
+
+Wordlists (vhost/dns) are baked into the gobuster image from SecLists; select
+with --wordlist <name|path> or $ROO_WORDLIST (default: subdomains-top1million-5000).
 
 Environment:
   ROO_NET=<spec>    docker --network for tools (e.g. container:roorecon-vpn)
@@ -151,20 +156,39 @@ def _work_mount():
     return _bind(Path.cwd(), "/work") + ["-w", "/work"]
 
 
+def _rel_out(out):
+    """Resolve an --out base to a cwd-relative path.
+
+    Only the current directory is mounted into containers (/work), so tools must
+    write under it. An absolute path inside cwd is rebased to relative; anything
+    outside cwd is a hard error (its output would silently vanish in-container).
+    """
+    p = Path(out)
+    if p.is_absolute():
+        try:
+            p = p.resolve().relative_to(Path.cwd())
+        except ValueError:
+            die(f"--out must be inside the current directory (mounted as /work); "
+                f"got '{out}'")
+    return p
+
+
 def _docker_run(tool, ref, tool_args, *, name=None, tty=False, stream=False,
-                quiet=False):
+                quiet=False, extra_mounts=None):
     """Build (and optionally launch) a `docker run` for a tool image.
 
     stream=True -> Popen with stdout piped (for the sweep reader); otherwise a
     blocking subprocess.run. quiet=True silences the tool's stdout/stderr (used
-    when we only care about the -oA/-oN files it writes).
+    when we only care about the -oA/-oN files it writes). extra_mounts injects
+    additional --mount specs (e.g. a custom wordlist).
     """
     cmd = ["docker", "run", "--rm"]
     if tty and sys.stdin.isatty() and sys.stdout.isatty():
         cmd.append("-it")
     if name:
         cmd += ["--name", name]
-    cmd += _caps(tool) + _net() + _hosts_mount() + _work_mount() + [ref] + list(tool_args)
+    cmd += (_caps(tool) + _net() + _hosts_mount() + (extra_mounts or [])
+            + _work_mount() + [ref] + list(tool_args))
     if stream:
         return subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -189,7 +213,7 @@ def cmd_sweep(args):
     require_docker()
     ref = ensure_image("nmap")
     target = args.target
-    outdir = Path(args.out) / target
+    outdir = _rel_out(args.out) / target
     ports_dir = outdir / "ports"
     ports_dir.mkdir(parents=True, exist_ok=True)
     (outdir / "sweep.done").unlink(missing_ok=True)
@@ -258,8 +282,9 @@ def cmd_sweep(args):
 
 
 # --- subcommand: buckaroo (mechanical per-port enum) ------------------------
+# ssl-cert on the http entry harvests cert CN/SAN hostnames (no-op on plain HTTP).
 NSE_PLAYBOOK = [
-    (re.compile(r"http"), "http-title,http-headers,http-methods,http-robots.txt"),
+    (re.compile(r"http"), "http-title,http-headers,http-methods,http-robots.txt,ssl-cert"),
     (re.compile(r"^ssh$"), "ssh2-enum-algos,ssh-hostkey"),
     (re.compile(r"^ftp$"), "ftp-anon,ftp-syst"),
     (re.compile(r"smb|microsoft-ds|netbios"), "smb-os-discovery,smb-security-mode,smb-enum-shares"),
@@ -276,13 +301,34 @@ def _service_from(nmap_txt, port, proto):
     return "unknown"
 
 
+# Hostnames a box reveals about itself: an HTTP redirect target, or the CN/SAN
+# of a TLS cert. These are the classic "add to /etc/hosts, then vhost-fuzz" seeds.
+_HOSTNAME_SOURCES = [
+    re.compile(r"redirect to https?://([A-Za-z0-9.-]+)"),  # http-title
+    re.compile(r"commonName=([A-Za-z0-9.*-]+)"),           # ssl-cert CN
+    re.compile(r"DNS:([A-Za-z0-9.*-]+)"),                  # ssl-cert SAN
+]
+_IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+
+def _extract_hostnames(text, target):
+    names = set()
+    for rx in _HOSTNAME_SOURCES:
+        for m in rx.finditer(text):
+            h = m.group(1).lower().strip(".")
+            if h and h != target and not _IP_RE.match(h) and "." in h:
+                names.add(h)
+    return sorted(names)
+
+
 def cmd_buckaroo(args):
     require_docker()
     if args.proto not in ("tcp", "udp"):
         die(f"proto must be tcp or udp (got '{args.proto}')", 2)
     ref = ensure_image("nmap")
     target, proto, port = args.target, args.proto, args.port
-    d = Path(args.out) / target / "ports" / f"{proto}-{port}"
+    out_base = _rel_out(args.out)
+    d = out_base / target / "ports" / f"{proto}-{port}"
     d.mkdir(parents=True, exist_ok=True)
     scan = ["-sS", "-sCV"] if proto == "tcp" else ["-sU", "-sV"]
 
@@ -312,8 +358,98 @@ def cmd_buckaroo(args):
         nse_lines = [ln for ln in scripts_txt.splitlines() if ln.startswith("|")]
         facts += ["", "## NSE script output", "```",
                   "\n".join(nse_lines) if nse_lines else "(no script output)", "```"]
+
+    # Surface hostnames the box revealed (redirect target / cert CN+SAN). The
+    # orchestrator adds these to ./hosts and feeds them to vhost/dns enum.
+    hostnames = _extract_hostnames(nmap_txt + "\n" + scripts_txt, target)
+    if hostnames:
+        facts += ["", "## Discovered hostnames",
+                  *(f"- `{h}`  (map to {target} in ./hosts)" for h in hostnames)]
+        hp = out_base / target / "hostnames.txt"
+        seen = set(hp.read_text().split()) if hp.exists() else set()
+        with hp.open("a") as f:
+            for h in hostnames:
+                if h not in seen:
+                    f.write(h + "\n")
+        ok(f"hostnames discovered: {', '.join(hostnames)}")
+
     (d / "facts.md").write_text("\n".join(facts) + "\n")
     ok(f"buckaroo done — facts in {d / 'facts.md'}")
+
+
+# --- subcommand: vhost / dns (name enumeration via gobuster) ----------------
+DEFAULT_WORDLIST = "/wordlists/subdomains-top1million-5000.txt"
+# gobuster 3.8 vhost prints "host Status: 200 [Size: N]"; dns prints "fqdn  ip,ip".
+VHOST_HIT_RE = re.compile(r"(\S+)\s+Status:")
+DNS_HIT_RE = re.compile(r"^([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)\b")
+
+
+def _resolve_wordlist(w):
+    """Return (container_path, extra_mounts) for a wordlist selector.
+
+    Selector may be a baked name (e.g. combined_subdomains.txt) or an absolute
+    /wordlists path -> used as-is; or a host file path -> mounted into the image.
+    Falls back to $ROO_WORDLIST, then the fast default.
+    """
+    w = w or os.environ.get("ROO_WORDLIST") or DEFAULT_WORDLIST
+    p = Path(w)
+    if p.is_file():  # a host path -> mount it in
+        return "/wordlists/_custom", _bind(p, "/wordlists/_custom", readonly=True)
+    if "/" not in w:  # a bare baked name
+        w = f"/wordlists/{w}"
+    return w, []
+
+
+def _stream_hits(proc, logpath, out_path, hit_re, label):
+    """Tee a gobuster stream to logpath, append each parsed hit to out_path."""
+    found = []
+    with logpath.open("w") as lf, out_path.open("a") as of:
+        for line in proc.stdout:
+            lf.write(line)
+            lf.flush()
+            m = hit_re.search(line)
+            if m:
+                name = m.group(1)
+                of.write(name + "\n")
+                of.flush()
+                found.append(name)
+                ok(f"{label}: {name}")
+    proc.wait()
+    return found
+
+
+def cmd_vhost(args):
+    """vhost (Host-header) enumeration against an internal IP."""
+    require_docker()
+    ref = ensure_image("gobuster")
+    wl, mounts = _resolve_wordlist(args.wordlist)
+    outdir = _rel_out(args.out) / args.target
+    outdir.mkdir(parents=True, exist_ok=True)
+    url = f"{args.scheme}://{args.target}"
+    info(f"vhost enum on {url} for *.{args.domain} (wordlist {wl})")
+    # gobuster 3.8 vhost auto-calibrates against a baseline and only reports
+    # vhosts whose response differs — so default-page false positives drop out.
+    gob = ["vhost", "-u", url, "--domain", args.domain, "--append-domain",
+           "-w", wl, "--no-progress", "-q"]
+    proc = _docker_run("gobuster", ref, gob, stream=True, extra_mounts=mounts)
+    found = _stream_hits(proc, outdir / "vhost.log", outdir / "vhosts.txt",
+                         VHOST_HIT_RE, "vhost")
+    ok(f"vhost enum done — {len(found)} hit(s) in {outdir / 'vhosts.txt'}")
+
+
+def cmd_dns(args):
+    """DNS subdomain enumeration for an external domain."""
+    require_docker()
+    ref = ensure_image("gobuster")
+    wl, mounts = _resolve_wordlist(args.wordlist)
+    outdir = _rel_out(args.out) / args.domain
+    outdir.mkdir(parents=True, exist_ok=True)
+    info(f"dns subdomain enum on {args.domain} (wordlist {wl})")
+    gob = ["dns", "--domain", args.domain, "-w", wl, "--no-progress", "-q"]
+    proc = _docker_run("gobuster", ref, gob, stream=True, extra_mounts=mounts)
+    found = _stream_hits(proc, outdir / "dns.log", outdir / "subdomains.txt",
+                         DNS_HIT_RE, "subdomain")
+    ok(f"dns enum done — {len(found)} name(s) in {outdir / 'subdomains.txt'}")
 
 
 # --- subcommand: recon (simple phased scan) ---------------------------------
@@ -321,7 +457,7 @@ def cmd_recon(args):
     require_docker()
     ref = ensure_image("nmap")
     target = args.target
-    outdir = Path(args.out) / target
+    outdir = _rel_out(args.out) / target
     outdir.mkdir(parents=True, exist_ok=True)
 
     info(f"Phase 1/2 — full TCP port sweep on {target} (this can take a few minutes)")
@@ -450,6 +586,20 @@ def build_parser():
     pb.add_argument("port")
     pb.add_argument("--out", default="recon-results")
     pb.set_defaults(func=cmd_buckaroo)
+
+    pvh = sub.add_parser("vhost", help="vhost (Host-header) enum for an internal IP")
+    pvh.add_argument("target", help="the IP serving the vhosts")
+    pvh.add_argument("domain", help="base domain to fuzz, e.g. box.htb")
+    pvh.add_argument("--scheme", default="http", choices=["http", "https"])
+    pvh.add_argument("--wordlist", help="baked name, /wordlists path, or host file")
+    pvh.add_argument("--out", default="recon-results")
+    pvh.set_defaults(func=cmd_vhost)
+
+    pdns = sub.add_parser("dns", help="DNS subdomain enum for an external domain")
+    pdns.add_argument("domain")
+    pdns.add_argument("--wordlist", help="baked name, /wordlists path, or host file")
+    pdns.add_argument("--out", default="recon-results")
+    pdns.set_defaults(func=cmd_dns)
 
     pv = sub.add_parser("vpn", help="manage the OpenVPN sidecar")
     pv.add_argument("action", choices=["up", "down", "status"])

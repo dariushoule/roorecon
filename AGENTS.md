@@ -25,7 +25,9 @@ PowerShell/cmd. Subcommands:
 ```bash
 scripts/roo run <tool> [args...]          # e.g. scripts/roo run nmap -sCV -p- <t>
 scripts/roo sweep <target>                # streaming parallel TCP+UDP discovery
-scripts/roo buckaroo <target> <proto> <port>   # per-port enum -> facts.md
+scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discovery
+scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
+scripts/roo dns <domain>                  # DNS subdomain enum, external domain
 scripts/roo recon <target>                # simple one-shot phased scan
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar
 ```
@@ -57,6 +59,10 @@ VPN-only target? Join the sidecar's netns:
 - **Host overrides go in `./hosts`, not the host's `/etc/hosts`** (which
   containers can't see). Add lines like `10.10.10.5 box.htb` to `./hosts`; `roo`
   mounts them into every tool container, direct or over VPN.
+- **Follow hostnames the box reveals.** Buckaroos report redirect/cert hostnames
+  (in `facts.md` + `hostnames.txt`). Add each to `./hosts`, then `roo vhost <ip>
+  <domain>` (internal) or `roo dns <domain>` (external) to find more; loop the
+  new names back through `./hosts` and re-buckaroo.
 
 ## Ground rules
 

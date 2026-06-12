@@ -21,10 +21,15 @@ Linux/macOS/Windows. The single entry point is the cross-platform `roo` CLI
 ```bash
 scripts/roo run <tool> [args...]          # e.g. scripts/roo run nmap -sCV -p- <t>
 scripts/roo sweep <target>                # streaming parallel TCP+UDP discovery
-scripts/roo buckaroo <target> <proto> <port>   # per-port enum -> facts.md
+scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discovery
+scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
+scripts/roo dns <domain>                  # DNS subdomain enum, external domain
 scripts/roo recon <target>                # simple one-shot phased scan
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar
 ```
+
+Name-enum wordlists are baked into the gobuster image (SecLists); default is a
+fast list, override with `--wordlist <name|host-path>` or `$ROO_WORDLIST`.
 
 `roo` builds `docker/<tool>/Dockerfile` on demand (tagged by Dockerfile hash)
 and runs it with the cwd mounted at `/work`. For VPN-only targets, join the VPN
@@ -60,6 +65,11 @@ sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
   `/etc/hosts` is invisible to containers. When a box needs a name (e.g.
   `10.10.10.5 box.htb`), add the line to `./hosts`; `roo` mounts it into every
   tool container automatically (works direct or over VPN).
+- **Follow hostnames the box reveals.** A buckaroo on a web port reports
+  redirect/cert hostnames (in `facts.md` and `hostnames.txt`). Add each to
+  `./hosts`, then enumerate more: `roo vhost <ip> <domain>` for an internal IP,
+  `roo dns <domain>` for an external one. Feed new names back into `./hosts` and
+  re-buckaroo — recon is a loop, not a line.
 
 ## Available skills
 
