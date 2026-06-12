@@ -112,12 +112,24 @@ and it records the mapping — or add it yourself to a git-ignored `./hosts` fil
 Either way `roo` mounts it into every tool container, so vhost resolution works
 whether you scan direct or over the VPN.
 
+## Gotchas
+
+- **Run only one tunnel per `.ovpn`.** HackTheBox, TryHackMe, and most lab VPNs
+  allow a **single connection per config file**. If you already have a host VPN
+  client running that same `.ovpn` (the HTB app, system OpenVPN, Tunnelblick,
+  etc.) and *also* let RooRecon start its sidecar, the two fight over that one
+  slot — the server keeps flapping between them and your scans go flaky: ports
+  show up `filtered` or closed one moment and open the next, and nothing
+  reproduces. **If a scan looks unreliable, suspect this before blaming the
+  box.** Pick one tunnel; for this containerized flow, disconnect the host
+  client and let the sidecar own the connection (`scripts/roo vpn up`). The host
+  client's `tun` usually can't route into the Docker VM anyway — which is the
+  whole reason the sidecar exists.
+
 ## Credits
 
 - **Wordlists** — vhost/DNS enumeration uses lists from
   [SecLists](https://github.com/danielmiessler/SecLists) by Daniel Miessler,
-  Jason Haddix & contributors (MIT-licensed). They're baked into the `gobuster`
-  image at build time; the upstream `LICENSE` ships alongside them in the image
-  at `/wordlists/SecLists-LICENSE`.
+  Jason Haddix & contributors.
 - **Tooling** — [nmap](https://nmap.org), [gobuster](https://github.com/OJ/gobuster),
   and [OpenVPN](https://openvpn.net), each in its own minimal container.
