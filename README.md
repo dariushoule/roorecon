@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="gemini_roorecon.png" alt="RooRecon" width="320">
+</p>
+
 # RooRecon
 
 A CTF and authorized-pentesting skills repo for **Claude Code** and **Codex**.
@@ -11,13 +15,14 @@ the output for you.
 ## Containerized tooling
 
 Every CLI runs inside its own minimal Docker image, so a scan behaves
-identically on Linux, macOS, or Windows (WSL2) — no host installs, no
-"works on my machine." `scripts/roo` is the single entry point: it builds the
-tool's image on demand and runs it with your current directory mounted at
-`/work`.
+identically on Linux, macOS, and Windows — no host installs, no "works on my
+machine." The single entry point is the cross-platform **`roo` CLI**
+(`scripts/roo.py`, stdlib Python): run `scripts/roo` on Unix or `scripts\roo.cmd`
+from PowerShell/cmd. It builds each tool's image on demand and runs it with your
+current directory mounted at `/work`.
 
 ```bash
-scripts/roo nmap -sCV -p- 10.10.10.5     # runs nmap in roorecon/nmap
+scripts/roo run nmap -sCV -p- 10.10.10.5   # runs nmap in roorecon/nmap
 ```
 
 Images are tagged with a hash of their Dockerfile, so editing a Dockerfile
@@ -26,16 +31,17 @@ auto-rebuilds and unchanged tools start instantly.
 ## Quick start
 
 ```bash
-# Drive the recon skill directly, or just ask the agent to "recon 10.10.10.5"
-scripts/recon/recon-host.sh 10.10.10.5
-# → results in ./recon-results/10.10.10.5/  (summary.txt has the digest)
+# Just ask the agent to "recon 10.10.10.5", or drive the CLI directly:
+scripts/roo sweep 10.10.10.5     # streaming parallel discovery (fast path)
+scripts/roo recon 10.10.10.5     # simple one-shot phased scan
+# → results in ./recon-results/10.10.10.5/
 ```
 
 ## What's here
 
 | Skill | What it does | Drives |
 |-------|--------------|--------|
-| `recon` | Maps a target's attack surface: full TCP sweep, service/version fingerprinting, and a prioritized "attack this first" list. | `scripts/recon/recon-host.sh` |
+| `recon` | Maps a target's attack surface. Fast path: streaming parallel TCP+UDP sweep that fires a per-port "buckaroo" deep-dive the moment each port opens. Simple path: a one-shot phased scan. | `roo sweep` + `roo buckaroo`, or `roo recon` |
 
 More skills (web exploitation, pwn/reversing, crypto/forensics) are planned —
 this repo intentionally starts small.
@@ -44,10 +50,8 @@ this repo intentionally starts small.
 
 ```
 .claude/skills/<name>/SKILL.md   # skill playbooks — auto-loaded by Claude Code
-scripts/roo                      # containerized-tooling dispatcher
-scripts/vpn                      # OpenVPN sidecar lifecycle (up/down/status)
-scripts/lib/image.sh             # shared build-on-demand image helper
-scripts/<name>/                  # automation each skill drives (calls roo)
+scripts/roo.py                   # the cross-platform roo CLI (tooling + automation)
+scripts/roo, scripts/roo.cmd     # Unix and Windows shims to it
 docker/<tool>/Dockerfile         # one minimal image per CLI (nmap, openvpn, …)
 AGENTS.md                        # Codex entry point → same skills
 CLAUDE.md                        # Claude Code conventions
@@ -62,37 +66,56 @@ Everything here is for **CTF boxes, lab ranges, and systems in a signed
 engagement scope**. Do not scan or test systems you are not explicitly
 authorized to assess.
 
+## Model access (provider verification required)
+
+These skills drive dual-use security tooling, which frontier labs gate behind
+verification programs — Claude and OpenAI models will refuse or limit
+offensive/dual-use tasks unless your account is verified for legitimate security
+work. To use RooRecon with foundation-lab models, enroll in the relevant program:
+
+- **Anthropic — Cyber Verification Program (CVP):** free, application-based;
+  lifts default blocks on dual-use work for verified defenders.
+  [Apply](https://claude.com/form/cyber-use-case) ·
+  [Overview](https://support.claude.com/en/articles/14604842-real-time-cyber-safeguards-on-claude) ·
+  [Usage Policy](https://www.anthropic.com/aup)
+- **OpenAI — Trusted Access for Cyber (TAC):** identity + organizational
+  verification with tiered access for defenders.
+  [Overview](https://openai.com/index/trusted-access-for-cyber/) ·
+  [Verify](https://chatgpt.com/cyber)
+
+Access remains subject to each provider's usage policy and the authorized-scope
+rules above.
+
 ## Requirements
 
 - **Docker** — all tooling runs in containers (Docker Engine, Docker Desktop,
-  or OrbStack). On Windows, run from **WSL2** with Docker integration.
-- A POSIX shell (`bash`). On Windows that's WSL2 or Git Bash.
+  or OrbStack).
+- **Python 3** — runs the `roo` CLI (stdlib only, no `pip install`).
 
-No host installs of `nmap` etc. — the images carry them.
+That's it. The `roo` CLI runs natively from **PowerShell**, cmd, bash, zsh, or
+Git Bash — same behavior everywhere. No host installs of `nmap` etc.; the images
+carry them.
 
 ### VPN targets (HTB/THM/OpenVPN)
 
-A container can't reach a VPN tunnel on the host on every platform (Docker
-Desktop on Windows/macOS won't route to a host `tun`). The portable fix: run the
-VPN as a sidecar container and have tools share its network namespace.
+**Just drop your engagement `.ovpn` into `./vpn/`** (git-ignored) and ask the
+agent to recon the box — it brings the tunnel up and routes every tool through
+it for you. You don't touch Docker networking.
 
-```bash
-# Drop your engagement .ovpn in ./vpn/ (git-ignored), then:
-scripts/vpn up                 # starts the roorecon-vpn sidecar, prints the tunnel IP
-ROO_NET=container:roorecon-vpn scripts/recon/recon-host.sh 10.10.10.5
-scripts/vpn status             # check the tunnel
-scripts/vpn down               # tear it down
-```
+Under the hood it runs the VPN as a sidecar container and has tool containers
+share its network namespace, so this works the same on Linux, macOS, and Windows
+(where a container otherwise can't reach a VPN `tun` on the host).
 
 ### Host name overrides
 
-The host's `/etc/hosts` is invisible to containers. Put per-engagement mappings
-in a git-ignored `./hosts` file (same format as `/etc/hosts`):
+The host's `/etc/hosts` is invisible to containers, so RooRecon keeps its own.
+When a box needs a name, just tell the agent (e.g. "`box.htb` is `10.10.10.5`")
+and it records the mapping — or add it yourself to a git-ignored `./hosts` file
+(same format as `/etc/hosts`):
 
 ```
 10.10.10.5  box.htb  admin.box.htb
 ```
 
-`roo` merges them with the standard localhost lines and mounts the result into
-every tool container — so vhost resolution works whether you scan direct or over
-the VPN.
+Either way `roo` mounts it into every tool container, so vhost resolution works
+whether you scan direct or over the VPN.

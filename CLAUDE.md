@@ -8,22 +8,27 @@ do the repeatable work).
 
 Skills live in `.claude/skills/<name>/SKILL.md` and are auto-discovered by
 Claude Code — each activates when its `description` matches the task. The
-SKILL.md is the single source of truth; the helper scripts it drives live in
-`scripts/<name>/`. Codex reads the same skills via `AGENTS.md`.
+SKILL.md is the single source of truth; the automation it drives lives in the
+`roo` CLI (`scripts/roo.py`). Codex reads the same skills via `AGENTS.md`.
 
 ## Containerized tooling (convention)
 
-All CLIs run in containers, never from the host, so behavior is identical
-across Linux/macOS/Windows(WSL2). Never call `nmap` (or any tool) directly —
-go through the dispatcher:
+All CLIs run in containers, never from the host, so behavior is identical across
+Linux/macOS/Windows. The single entry point is the cross-platform `roo` CLI
+(`scripts/roo.py`, stdlib Python) — invoke `scripts/roo` on Unix or
+`scripts\roo.cmd` from PowerShell/cmd. Subcommands:
 
 ```bash
-scripts/roo <tool> [args...]      # e.g. scripts/roo nmap -sCV -p- <target>
+scripts/roo run <tool> [args...]          # e.g. scripts/roo run nmap -sCV -p- <t>
+scripts/roo sweep <target>                # streaming parallel TCP+UDP discovery
+scripts/roo buckaroo <target> <proto> <port>   # per-port enum -> facts.md
+scripts/roo recon <target>                # simple one-shot phased scan
+scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar
 ```
 
-`scripts/roo` builds `docker/<tool>/Dockerfile` on demand (tagged by Dockerfile
-hash) and runs it with the cwd mounted at `/work`. For VPN-only targets, join a
-VPN sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo nmap ...`.
+`roo` builds `docker/<tool>/Dockerfile` on demand (tagged by Dockerfile hash)
+and runs it with the cwd mounted at `/work`. For VPN-only targets, join the VPN
+sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
 
 ## Networking & VPN (agent guidance — important)
 
@@ -40,13 +45,14 @@ VPN sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo nmap ...`.
   rather than scanning blind. Note resolution context differs by mode: a tool
   container resolves via its own DNS + the mounted `./hosts`, and over the VPN it
   uses the tunnel's DNS — not the host's resolver.
-- **Require a tunnel before scanning such a target.** Check `scripts/vpn status`.
-  If it's down, start it with `scripts/vpn up`, then route tools through it:
-  `ROO_NET=container:roorecon-vpn scripts/recon/recon-host.sh <target>`.
-- **If no OpenVPN config is present, ask for one.** `scripts/vpn up` looks for a
-  `.ovpn` in `./vpn/`. If there is none, STOP and ask the user to drop their
-  `.ovpn` into `./vpn/` (it's git-ignored) — never attempt to scan a VPN-only
-  target without it.
+- **Require a tunnel before scanning such a target.** Check
+  `scripts/roo vpn status`. If it's down, start it with `scripts/roo vpn up`,
+  then route tools through it:
+  `ROO_NET=container:roorecon-vpn scripts/roo sweep <target>`.
+- **If no OpenVPN config is present, ask for one.** `scripts/roo vpn up` looks
+  for a `.ovpn` in `./vpn/`. If there is none, STOP and ask the user to drop
+  their `.ovpn` into `./vpn/` (it's git-ignored) — never attempt to scan a
+  VPN-only target without it.
 - **Note internal IPs.** Record every private/internal IP you encounter — the
   target itself and any internal hosts surfaced in scan output — as pivot
   candidates in your engagement notes.
@@ -58,8 +64,9 @@ VPN sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo nmap ...`.
 ## Available skills
 
 - **recon** (`.claude/skills/recon/SKILL.md`) — network/service/web enumeration.
-  Drives `scripts/recon/recon-host.sh` to map a target's attack surface and
-  produce a prioritized "attack this first" list.
+  Fast path: `scripts/roo sweep` streams open ports while per-port
+  `scripts/roo buckaroo` deep-dives each one; simple path: `scripts/roo recon`.
+  Produces a prioritized "attack this first" list.
 
 ## Ground rules
 
@@ -75,8 +82,9 @@ VPN sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo nmap ...`.
 
 1. `mkdir -p .claude/skills/<name>` and write `SKILL.md` with `name` +
    `description` frontmatter (the description is what triggers activation).
-2. Put any automation in `scripts/<name>/`; have it drive tools via
-   `scripts/roo`, keep it re-runnable.
+2. Drive tools through `scripts/roo run <tool>`. Reusable multi-step automation
+   goes in `scripts/roo.py` as a new subcommand (keep it cross-platform: stdlib
+   only, no shell-isms).
 3. New CLI? Add `docker/<tool>/Dockerfile` (minimal, `FROM debian:stable-slim`)
-   and, if it needs raw sockets, a caps entry in the `roo` registry.
+   and, if it needs raw sockets, add the tool to `_caps()` in `scripts/roo.py`.
 4. List it under "Available skills" above and in `AGENTS.md`.
