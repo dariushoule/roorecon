@@ -14,6 +14,10 @@ Subcommands:
   dns <domain>                    DNS subdomain enum for an external domain
   recon <target>                  simple one-shot phased scan
   vpn <up|down|status> [config]   manage the OpenVPN sidecar
+  proxy <up|down|status>          SOCKS5 egress for host tools (browser/Burp/curl)
+  shell [cmd...]                  interactive operator shell in the tunnel namespace
+  ip                              print the tunnel IP (your LHOST)
+  fwd <port> [--stop]             bridge a tunnel port to a host listener
 
 Wordlists (vhost/dns) are baked into the gobuster image from SecLists; select
 with --wordlist <name|path> or $ROO_WORDLIST (default: subdomains-top1million-5000).
@@ -52,6 +56,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKER_DIR = Path(os.environ.get("ROO_DOCKER_DIR", REPO_ROOT / "docker"))
 IMAGE_PREFIX = "roorecon"
 VPN_CONTAINER = "roorecon-vpn"
+PROXY_CONTAINER = "roorecon-proxy"
+# Host port the sidecar publishes for the SOCKS proxy (override with ROO_SOCKS_PORT).
+# Bound to 127.0.0.1 on the host; the in-namespace port is always 1080.
+SOCKS_PORT = int(os.environ.get("ROO_SOCKS_PORT", "1080"))
 
 DISCOVERED_RE = re.compile(r"Discovered open port (\d+)/(tcp|udp)")
 
@@ -563,9 +571,18 @@ def cmd_vpn(args):
     subprocess.run(["docker", "rm", "-f", VPN_CONTAINER],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     info(f"starting VPN sidecar with {config.name}")
+    # The sidecar owns the tunnel namespace, so it carries the two bits of
+    # namespace *config* that only the owner can set (never tools — see
+    # ARCHITECTURE.md): it publishes the SOCKS port the host reaches (netns-
+    # sharing containers can't publish), and it maps host.docker.internal so
+    # `roo fwd` can resolve the host's IP through it (--add-host is rejected on
+    # the netns-sharing side). Both are fixed at creation — Docker can't add them
+    # to a running container — so they're always present, not added lazily.
     subprocess.run(
         ["docker", "run", "-d", "--name", VPN_CONTAINER,
          "--cap-add=NET_ADMIN", "--device", "/dev/net/tun",
+         "-p", f"127.0.0.1:{SOCKS_PORT}:1080",
+         "--add-host", "host.docker.internal:host-gateway",
          *_bind(config.parent, "/vpn", readonly=True), "-w", "/vpn",
          ref, "--config", config.name],
         stdout=subprocess.DEVNULL, check=True)
@@ -582,8 +599,187 @@ def cmd_vpn(args):
         time.sleep(1)
     if not addr:
         die(f"tunnel did not come up within 20s. Check: docker logs {VPN_CONTAINER}")
-    ok(f"VPN up — tunnel address {addr}")
-    info(f"route tools through it with:  ROO_NET=container:{VPN_CONTAINER} roo run <tool> ...")
+    ok(f"VPN up — tunnel address {addr}  (your LHOST for reverse shells)")
+    info(f"scan over it:   ROO_NET=container:{VPN_CONTAINER} roo run <tool> ...")
+    info("host probes:    roo proxy up   (browser/Burp/curl via SOCKS)")
+    info("catch shells:   roo shell      (listeners/hosting at the tunnel IP)")
+
+
+# --- subcommands: proxy / shell / ip / fwd (sidecar as your box on the net) --
+# The sidecar owns the tunnel IP, so it is effectively the tester's host on the
+# engagement network. These verbs give that host two faces and an escape hatch:
+#   proxy  — egress: outbound host tools reach the target through the tunnel.
+#   shell  — ingress: listeners/hosting bind the tunnel IP (reverse shells).
+#   fwd    — bridge a tunnel port back to a listener on the real host.
+#   ip     — print the tunnel IP (your LHOST).
+def _require_vpn(what):
+    if not _vpn_running():
+        die(f"{what} needs the VPN sidecar — it owns the tunnel. Start it: roo vpn up")
+
+
+def _sidecar_iface_ip(iface):
+    """IPv4 on a named interface inside the sidecar netns (e.g. eth0, tun0)."""
+    r = subprocess.run(["docker", "exec", VPN_CONTAINER, "ip", "-4", "-o", "addr", "show", iface],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", r.stdout)
+    return m.group(1) if m else ""
+
+
+def _host_gateway_ip():
+    """IPv4 of the real host as seen from inside the tunnel namespace.
+
+    `roo fwd` needs this so a socat *tool* container (which can't use --add-host
+    under --network container:) can reach a host listener by literal IP. We
+    resolve it from the sidecar, which carries host.docker.internal via
+    --add-host host-gateway (Desktop also injects it). Fall back to the sidecar's
+    default route (the bridge gateway) on platforms without that name.
+    """
+    r = subprocess.run(["docker", "exec", VPN_CONTAINER,
+                        "getent", "ahostsv4", "host.docker.internal"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    m = re.search(r"^(\d+\.\d+\.\d+\.\d+)", r.stdout)
+    if m:
+        return m.group(1)
+    r = subprocess.run(["docker", "exec", VPN_CONTAINER, "ip", "route"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    m = re.search(r"default via (\d+\.\d+\.\d+\.\d+)", r.stdout)
+    return m.group(1) if m else ""
+
+
+def _sidecar_publishes_socks():
+    """True if the running sidecar exposes the in-namespace SOCKS port (1080/tcp).
+
+    Published ports are fixed at container creation, so a sidecar started before
+    this was added (or with a different ROO_SOCKS_PORT) won't carry it — the proxy
+    would start but be unreachable from the host. Detect that and tell the user to
+    cycle the tunnel rather than fail silently.
+    """
+    r = subprocess.run(["docker", "inspect", "-f",
+                        "{{json .NetworkSettings.Ports}}", VPN_CONTAINER],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return '"1080/tcp"' in r.stdout and "HostPort" in r.stdout
+
+
+def cmd_ip(args):
+    """Print the tunnel IP (your LHOST), unadorned for scripting."""
+    require_docker()
+    _require_vpn("roo ip")
+    addr = _tun_addr()
+    if not addr:
+        die("sidecar is up but tun0 has no address yet")
+    print(addr)
+
+
+def cmd_proxy(args):
+    """SOCKS5 egress so host tools reach the target through the tunnel."""
+    require_docker()
+    if args.action == "status":
+        running = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", PROXY_CONTAINER],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip() == "true"
+        ok(f"SOCKS proxy running — host 127.0.0.1:{SOCKS_PORT}") if running else \
+            info("SOCKS proxy is not running (roo proxy up)")
+        return
+    if args.action == "down":
+        r = subprocess.run(["docker", "rm", "-f", PROXY_CONTAINER],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ok("SOCKS proxy stopped") if r.returncode == 0 else info("no SOCKS proxy running")
+        return
+    # up
+    _require_vpn("roo proxy")
+    if not _sidecar_publishes_socks():
+        die("the running sidecar doesn't publish the SOCKS port — cycle the tunnel "
+            "to pick it up:  roo vpn down && roo vpn up")
+    ref = ensure_image("net-toolbox")
+    # Bind microsocks to the sidecar's *bridge* IP, not tun0: the host reaches it
+    # via the published port (DNAT'd to this IP), while a box on the VPN cannot
+    # hit tun0:1080 and abuse us as an open pivot. Fall back to 0.0.0.0 only if we
+    # can't read the bridge IP (with a warning), never silently.
+    bridge_ip = _sidecar_iface_ip("eth0")
+    if not bridge_ip:
+        err("could not read the sidecar bridge IP; binding 0.0.0.0 (also exposes "
+            "the proxy on the tunnel IP — a VPN peer could use it). Investigate if unexpected.")
+        bridge_ip = "0.0.0.0"
+    subprocess.run(["docker", "rm", "-f", PROXY_CONTAINER],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(
+        ["docker", "run", "-d", "--name", PROXY_CONTAINER,
+         "--network", f"container:{VPN_CONTAINER}", ref,
+         "microsocks", "-i", bridge_ip, "-p", "1080"],
+        stdout=subprocess.DEVNULL, check=True)
+    # A ready-to-use proxychains config for host/container tools that want it.
+    gen_dir = Path(".roo")
+    gen_dir.mkdir(exist_ok=True)
+    pc = gen_dir / "proxychains.conf"
+    pc.write_text("strict_chain\nproxy_dns\n[ProxyList]\n"
+                  f"socks5 127.0.0.1 {SOCKS_PORT}\n")
+    ok(f"SOCKS proxy up — host 127.0.0.1:{SOCKS_PORT}")
+    info(f"  curl:        curl --socks5h 127.0.0.1:{SOCKS_PORT} http://<target>/")
+    info(f"  proxychains: proxychains -f {pc} <tool> <target>")
+    info(f"  browser/Burp: SOCKS5 host 127.0.0.1 port {SOCKS_PORT} (remote DNS)")
+    info("note: TCP-connect only — raw -sS/-sU scans must run as roo containers")
+
+
+def cmd_shell(args):
+    """Interactive operator shell in the tunnel namespace (/work mounted)."""
+    require_docker()
+    _require_vpn("roo shell")
+    ref = ensure_image("net-toolbox")
+    cmd_args = args.args or []
+    interactive = not cmd_args and sys.stdin.isatty() and sys.stdout.isatty()
+    if not cmd_args:
+        addr = _tun_addr()
+        info(f"toolbox in the tunnel namespace — LHOST is {addr}, /work is your cwd")
+        info("  reverse shell:  ncat -lvnp 4444")
+        info("  host a file:    python3 -m http.server 8000")
+    cmd = ["docker", "run", "--rm"]
+    if interactive:
+        cmd.append("-it")
+    cmd += (["--network", f"container:{VPN_CONTAINER}"]
+            + _hosts_mount() + _work_mount() + [ref] + list(cmd_args))
+    r = subprocess.run(cmd)
+    sys.exit(r.returncode)
+
+
+def cmd_fwd(args):
+    """Bridge a tunnel port to a listener on the real host (target -> host)."""
+    require_docker()
+    _require_vpn("roo fwd")
+    port = str(args.port)
+    if not port.isdigit() or not (0 < int(port) < 65536):
+        die(f"port must be 1-65535 (got '{port}')", 2)
+    # Each forward is one socat in its own net-toolbox container in the tunnel
+    # namespace, named so we can stop it by removing the container — no tools in
+    # the sidecar, no pkill. (A tool container can't use --add-host, so we hand
+    # socat the host's literal IPv4 instead of the host.docker.internal name.)
+    name = f"roo-fwd-{port}"
+    if args.stop:
+        r = subprocess.run(["docker", "rm", "-f", name],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ok(f"forward on tunnel :{port} stopped") if r.returncode == 0 else \
+            info(f"no forward running on :{port}")
+        return
+    tun_ip = _tun_addr()
+    if not tun_ip:
+        die("sidecar is up but tun0 has no address yet")
+    gw_ip = _host_gateway_ip()
+    if not gw_ip:
+        die("could not resolve the host gateway from the sidecar; can't forward")
+    ref = ensure_image("net-toolbox")
+    subprocess.run(["docker", "rm", "-f", name],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Bind to the tunnel IP only, so the forward accepts solely from the VPN side;
+    # TCP4 to the host's literal IPv4 (host.docker.internal can resolve v6-only).
+    listen = f"TCP-LISTEN:{port},bind={tun_ip},fork,reuseaddr"
+    dest = f"TCP4:{gw_ip}:{port}"
+    subprocess.run(
+        ["docker", "run", "-d", "--rm", "--name", name,
+         "--network", f"container:{VPN_CONTAINER}", ref, "socat", listen, dest],
+        stdout=subprocess.DEVNULL, check=True)
+    ok(f"forwarding tunnel {tun_ip}:{port} → host 127.0.0.1:{port}")
+    info(f"  start your host listener first, e.g.:  nc -lvnp {port}")
+    info(f"  set the target's callback to {tun_ip}:{port}")
+    info(f"  stop it with:  roo fwd {port} --stop")
 
 
 # --- CLI --------------------------------------------------------------------
@@ -627,6 +823,23 @@ def build_parser():
     pv.add_argument("action", choices=["up", "down", "status"])
     pv.add_argument("config", nargs="?")
     pv.set_defaults(func=cmd_vpn)
+
+    pp = sub.add_parser("proxy", help="SOCKS5 egress for host tools (browser/Burp/curl)")
+    pp.add_argument("action", choices=["up", "down", "status"])
+    pp.set_defaults(func=cmd_proxy)
+
+    psh = sub.add_parser("shell", help="interactive operator shell in the tunnel namespace")
+    psh.add_argument("args", nargs=argparse.REMAINDER,
+                     help="optional command to run instead of an interactive shell")
+    psh.set_defaults(func=cmd_shell)
+
+    pip = sub.add_parser("ip", help="print the tunnel IP (your LHOST)")
+    pip.set_defaults(func=cmd_ip)
+
+    pf = sub.add_parser("fwd", help="bridge a tunnel port to a host listener (target -> host)")
+    pf.add_argument("port", help="port to forward (same number on tunnel and host)")
+    pf.add_argument("--stop", action="store_true", help="tear down the forward for this port")
+    pf.set_defaults(func=cmd_fwd)
     return p
 
 

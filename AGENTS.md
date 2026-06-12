@@ -29,12 +29,21 @@ scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discov
 scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
 scripts/roo dns <domain>                  # DNS subdomain enum, external domain
 scripts/roo recon <target>                # simple one-shot phased scan
-scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar
+scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
+scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp)
+scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
+scripts/roo ip                            # print the tunnel IP (your LHOST)
+scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
 ```
 
 It builds `docker/<tool>/Dockerfile` on demand and mounts the cwd at `/work`.
 VPN-only target? Join the sidecar's netns:
 `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
+
+**Architecture:** the VPN sidecar is a *location* (owns the tunnel namespace);
+everything else is a *tool* that runs in it. `proxy`/`shell`/`fwd` are run-modes
+of one `net-toolbox` image, not the scanners. Read **`ARCHITECTURE.md`** before
+adding a tool, skill, or network capability.
 
 ## Networking & VPN (agent guidance — important)
 

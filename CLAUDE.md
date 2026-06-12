@@ -25,7 +25,11 @@ scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discov
 scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
 scripts/roo dns <domain>                  # DNS subdomain enum, external domain
 scripts/roo recon <target>                # simple one-shot phased scan
-scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar
+scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
+scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp/curl)
+scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
+scripts/roo ip                            # print the tunnel IP (your LHOST)
+scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
 ```
 
 Name-enum wordlists are baked into the gobuster image (SecLists); default is a
@@ -34,6 +38,15 @@ fast list, override with `--wordlist <name|host-path>` or `$ROO_WORDLIST`.
 `roo` builds `docker/<tool>/Dockerfile` on demand (tagged by Dockerfile hash)
 and runs it with the cwd mounted at `/work`. For VPN-only targets, join the VPN
 sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
+
+**Architecture (read `ARCHITECTURE.md` before adding tools/skills).** The VPN
+sidecar is a *location* — it owns the tunnel namespace and nothing else (no tools
+in it). Everything else is a *tool* that runs in that namespace: scanners
+(`nmap`, `gobuster`) and the `net-toolbox` operator image, whose three run-modes
+are `proxy` (outbound SOCKS egress), `shell` (inbound listeners/hosting at the
+tunnel IP), and `fwd` (bridge a tunnel port to a host listener). Reverse shells
+and stage hosting must bind the tunnel IP, so they live in `shell`, not behind a
+proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
 
 ## Networking & VPN (agent guidance — important)
 

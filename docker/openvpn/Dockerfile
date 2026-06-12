@@ -5,7 +5,10 @@
 # routes through the tunnel — works identically on Linux/macOS/Windows, where a
 # container otherwise can't reach a VPN tun on the host.
 #
-# iproute2 is included so `scripts/vpn status` can read the tun0 address.
+# This is the "location" image: its only job is to own the tunnel and the
+# network namespace that tool containers share. Keep it minimal — no operator
+# tools live here (see ARCHITECTURE.md, "location vs. tools"). iproute2 is the
+# one extra, so `roo vpn status` / `roo ip` can read the tun0 address.
 FROM debian:stable-slim
 
 RUN apt-get update \
