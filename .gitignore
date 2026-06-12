@@ -1,0 +1,21 @@
+# Scan output / loot — never commit target data
+recon-results/
+loot/
+*.nmap
+*.gnmap
+*.xml
+
+# OpenVPN configs, creds, and keys — never commit (secrets + target data)
+vpn/*
+!vpn/.gitkeep
+
+# Per-engagement /etc/hosts overrides and roo's generated artifacts
+hosts
+.roo/
+
+# Local Claude Code settings (per-user; keep settings.json shared)
+.claude/settings.local.json
+
+# OS / editor cruft
+.DS_Store
+*.swp
