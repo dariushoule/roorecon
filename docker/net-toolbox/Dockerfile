@@ -20,8 +20,22 @@ RUN apt-get update \
  && git clone --depth 1 https://github.com/rofl0r/microsocks /src \
  && make -C /src
 
+# RustHound-CE built from source so the Kerberos/GSSAPI feature is compiled in
+# (the prebuilt release omits it; without it you can't seal LDAP and a hardened DC
+# rejects the bind). GSSAPI is enabled by default once libclang/libkrb5 are present
+# at build time. Only the binary is copied into the final image — the Rust
+# toolchain stays in this stage.
+FROM rust:slim-bookworm AS rusthound
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      pkg-config gcc clang libclang-dev libgssapi-krb5-2 libkrb5-dev \
+      libsasl2-modules-gssapi-mit ca-certificates \
+ && cargo install rusthound-ce \
+ && rm -rf /var/lib/apt/lists/*
+
 FROM debian:stable-slim
 COPY --from=microsocks /src/microsocks /usr/local/bin/microsocks
+COPY --from=rusthound /usr/local/cargo/bin/rusthound-ce /usr/local/bin/rusthound-ce
 
 # pipx drops app shims in PIPX_BIN_DIR; point it at /usr/local/bin so `nxc` and
 # `certipy` land on the PATH every run-mode already sees. OPENSSL_CONF activates
@@ -73,6 +87,11 @@ RUN apt-get update \
  && gem install --no-document evil-winrm \
  && rm -rf /var/lib/apt/lists/*
 
+# RustHound-CE: built from source (multi-stage, binary copied in above) — the
+# prebuilt release ships WITHOUT GSSAPI, and NTLM can't seal, so only a
+# Kerberos/GSSAPI build collects from a signing-enforced DC. Runtime libs
+# (libgssapi-krb5, libkrb5) come from krb5-user/krb5-pkinit already installed.
+
 # OpenSSL 3 dropped MD4 from the default provider, but NTLM auth still derives
 # its key with MD4 — so every ldap3-based tool (NetExec, Certipy, badsuccessor)
 # dies on "unsupported hash type MD4" the moment you bind with a password.
@@ -91,10 +110,14 @@ RUN printf '%s\n' \
   'activate = 1' \
   > /etc/ssl/openssl-legacy.cnf
 
-# clocksync: one-shot "sync this shell's clock to a target" (drives libfaketime,
-# which `roo shell` LD_PRELOADs). Beats the DC's KRB_AP_ERR_SKEW without touching
-# the host clock — the manual operator's friend; the `ad` skill calls it.
-COPY --chmod=0755 clocksync /usr/local/bin/clocksync
+# Operator helper scripts:
+#   clocksync — sync this shell's clock to a target (drives the libfaketime that
+#               `roo shell` LD_PRELOADs) to beat KRB_AP_ERR_SKEW without touching
+#               the host clock.
+#   krbconf   — write /etc/krb5.conf for a target's realm (system-GSSAPI tools).
+#   bhcollect — one-command BloodHound CE collection via rusthound-ce's Kerberos
+#               seal (works on hardened DCs); ties krbconf+clocksync+getTGT+rusthound.
+COPY --chmod=0755 clocksync krbconf bhcollect /usr/local/bin/
 
 WORKDIR /work
 # No ENTRYPOINT: `roo shell` runs bash, `roo proxy` runs microsocks, `roo fwd`

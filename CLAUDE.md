@@ -57,8 +57,9 @@ it — `roo` prints this hint on a rate-limited build.
 tools with a `docker/<tool>/Dockerfile` (`nmap`, `gobuster`) — `roo run curl …`
 fails, there's no such image. Ad-hoc clients (curl, wget, nc, socat, dig,
 smbclient, ldapsearch, impacket) and the AD attack tooling (`nxc`/NetExec,
-`bloodyAD`, `certipy`, `evil-winrm` + `evil-winrm-py`, BloodHound collectors,
-plus `faketime` and `rlwrap`) live in
+`bloodyAD`, `certipy`, `evil-winrm` + `evil-winrm-py`, BloodHound collectors —
+incl. `rusthound-ce` wrapped by the one-command `bhcollect` for hardened DCs —
+plus the `clocksync`/`krbconf`/`faketime`/`rlwrap` helpers) live in
 `net-toolbox`; reach them at the tunnel IP with **`scripts/roo shell <cmd>`**
 (e.g. `scripts/roo shell nxc smb <target> -u U -p P --shares`). For a Domain
 Controller, follow the **ad** skill — it sequences these into a runbook and

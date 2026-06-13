@@ -1,0 +1,36 @@
+#!/bin/sh
+# bhcollect — collect BloodHound CE data from a DC and drop a zip in the cwd,
+# handling the fiddly Kerberos setup for you. Uses rusthound-ce's GSSAPI/Kerberos
+# path, which *seals* LDAP over 389 — so it works on signing-enforced / LDAPS-
+# resetting DCs that defeat the python (ldap3) collectors (nxc --bloodhound,
+# bloodhound-python). Auto-discovers the domain + DC FQDN from the target.
+#
+#   bhcollect <dc-ip> <user> <password> [output-dir]
+#
+# then view it:  scripts/roo bloodhound view <the-zip>
+DC="$1"; USER="$2"; PASS="$3"; OUT="${4:-.}"
+[ -n "$DC" ] && [ -n "$USER" ] && [ -n "$PASS" ] || {
+    echo "usage: bhcollect <dc-ip> <user> <password> [out-dir]" >&2; exit 2; }
+
+# 1) discover domain + DC FQDN from the target over SMB
+info=$(DumpNTLMInfo.py "$DC" 2>/dev/null)
+DOMAIN=$(echo "$info" | sed -n 's/.*DNS Domain Name *: *//p' | head -1 | tr -d '\r')
+FQDN=$(echo "$info"   | sed -n 's/.*DNS Host Name *: *//p'   | head -1 | tr -d '\r')
+[ -n "$DOMAIN" ] || { echo "[!] couldn't read domain from $DC (is SMB/445 reachable?)" >&2; exit 1; }
+[ -n "$FQDN" ]   || FQDN="$DC"
+echo "[*] target $FQDN — domain $DOMAIN"
+
+# 2) realm config (GSSAPI) + clock sync (skew) + a TGT (impacket)
+krbconf "$DC" "$DOMAIN" >/dev/null || exit 1
+clocksync "$DC" >/dev/null
+getTGT.py -dc-ip "$DC" "$DOMAIN/$USER:$PASS" >/dev/null 2>&1 || {
+    echo "[!] getTGT failed — bad creds, or SMB/Kerberos unreachable" >&2; exit 1; }
+export KRB5CCNAME="$PWD/$USER.ccache"
+
+# 3) collect over sealed LDAP via Kerberos/GSSAPI
+echo "[*] collecting with rusthound-ce (Kerberos/GSSAPI seal over 389)…"
+rusthound-ce -d "$DOMAIN" -u "$USER@$DOMAIN" -f "$FQDN" -i "$DC" -n "$DC" -k -z -o "$OUT"
+rc=$?
+rm -f "$PWD/$USER.ccache"
+[ "$rc" -eq 0 ] || { echo "[!] rusthound-ce exited $rc" >&2; exit "$rc"; }
+echo "[+] done — zip in $OUT/ ;  view it:  scripts/roo bloodhound view <zip>"

@@ -51,7 +51,7 @@ the fixes; you mostly need to *pick the right auth*.
 | dMSA / BadSuccessor audit | `nxc ldap … -M badsuccessor` | `badsuccessor.py -action search` |
 | ADCS triage | `certipy find -ldap-scheme ldap …` | `certipy find` (defaults to LDAPS → reset) |
 | Roasting | `nxc ldap … --kerberoasting --asreproast` | — |
-| Full BloodHound graph | `rusthound-ce` (Rust LDAP, seals) **or** SharpHound on a foothold | `bloodhound-python` (ldap3 → can't seal here) |
+| Full BloodHound graph | `bhcollect <dc> <user> <pass>` (rusthound-ce GSSAPI, *seals*) | `bloodhound-python` / `nxc --bloodhound` (ldap3 → can't seal here) |
 
 `nxc` prints `signing:Enforced` / `channel binding:…` so you know up front what
 the DC demands. The impacket *native*-LDAP examples (GetADUsers/GetUserSPNs) also
@@ -199,7 +199,8 @@ Everything runs in `net-toolbox` at the tunnel IP via `scripts/roo shell …`:
 | Kerberos tickets | `getTGT.py` / `getST.py` (+ `faketime`) |
 | Roasting | `nxc ldap --kerberoasting/--asreproast`, `GetUserSPNs.py`, `GetNPUsers.py` |
 | dMSA / BadSuccessor | audit `nxc -M badsuccessor`; exploit `badsuccessor.py -action {add,modify}` |
-| Full BloodHound graph | `bloodhound-ce-python` (normal DCs) / `rusthound-ce` or SharpHound (seal-enforced) |
+| Full BloodHound graph | `bhcollect <dc> <user> <pass>` (rusthound-ce, *seals* — hardened DCs) / `bloodhound-ce-python` (soft DCs); then `roo bloodhound view <zip>` |
+| Kerberos realm setup | `krbconf <dc>` (writes /etc/krb5.conf for GSSAPI tools) |
 | Delegation / ACL / RBCD | `findDelegation.py`, `rbcd.py`, `owneredit.py` (impacket-native seal OK) |
 | Secrets / DCSync | `secretsdump.py` |
 | Exec | `psexec.py`, `wmiexec.py`, `smbexec.py`, `nxc -x` |
@@ -232,10 +233,12 @@ The easily-forgotten reach of the workhorses:
   computer/groupMember/dMSA`, `remove`. Reaches what ldap3 tools refuse here.
 - **`certipy`** — `find` (force `-ldap-scheme ldap`), `req`, `auth`, `relay`, `shadow`.
 
-So "collect the graph": nxc/bloodyAD already read the pieces over sealed LDAP; a
-ready-to-ingest *zip* on a seal-enforced DC needs a sealing collector
-(`rusthound-ce`) or the ADWS path (SOAPHound via 9389) — not a reason to call the
-data uncollectable.
+So "collect the graph": nxc/bloodyAD already read the pieces over sealed LDAP, and
+a ready-to-ingest *zip* even on a seal-enforced DC is **`bhcollect <dc> <user>
+<pass>`** — it drives rusthound-ce's Kerberos/GSSAPI path (the one collector that
+seals over 389) plus the krb5/clock setup, then `roo bloodhound view <zip>`. The
+python collectors (`bloodhound-python`, `nxc --bloodhound`) can't seal and fail
+here; that's a tool limit, never "the data is uncollectable".
 
 Loop, don't line: every new credential, hash, or hostname feeds back into the
 sweep. Generate the final map with `scripts/roo report <dc-ip>` once buckaroos +

@@ -1,0 +1,31 @@
+#!/bin/sh
+# krbconf — write /etc/krb5.conf for a target's realm so system-GSSAPI Kerberos
+# tools (rusthound-ce -k, ldapsearch -Y GSSAPI, certipy -k) know the default realm
+# and KDC. MIT krb5/GSSAPI reads /etc/krb5.conf; impacket's own Kerberos doesn't,
+# which is why getTGT works without this but rusthound-ce -k fails with
+# "Configuration file does not specify default realm" until you run it.
+# Auto-discovers the domain from the DC over SMB. Pairs with clocksync (time).
+#
+#   krbconf <dc-ip> [domain]
+DC="$1"; DOMAIN="$2"
+[ -n "$DC" ] || { echo "usage: krbconf <dc-ip> [domain]" >&2; exit 2; }
+if [ -z "$DOMAIN" ]; then
+    DOMAIN=$(DumpNTLMInfo.py "$DC" 2>/dev/null | sed -n 's/.*DNS Domain Name *: *//p' | head -1 | tr -d '\r')
+fi
+[ -n "$DOMAIN" ] || { echo "[!] couldn't read the domain from $DC — pass it: krbconf $DC <domain>" >&2; exit 1; }
+REALM=$(echo "$DOMAIN" | tr '[:lower:]' '[:upper:]')
+
+cat > /etc/krb5.conf <<EOF
+[libdefaults]
+    default_realm = $REALM
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+[realms]
+    $REALM = {
+        kdc = $DC
+    }
+[domain_realm]
+    .$DOMAIN = $REALM
+    $DOMAIN = $REALM
+EOF
+echo "[+] /etc/krb5.conf set — realm $REALM, kdc $DC"

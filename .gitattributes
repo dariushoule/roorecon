@@ -5,3 +5,5 @@
 *.sh            text eol=lf
 scripts/roo     text eol=lf
 docker/net-toolbox/clocksync text eol=lf
+docker/net-toolbox/krbconf   text eol=lf
+docker/net-toolbox/bhcollect text eol=lf

@@ -35,14 +35,14 @@ UI at `http://127.0.0.1:8080`, login `admin` / `BloodHoundRoo!2026` (override wi
 ## Workflow
 
 1. **Get a collection.** Two sources:
-   - **Bring a zip** (the reliable path) — a SharpHound/rusthound/AzureHound or
-     `nxc --bloodhound` zip already on disk. This is what to do when a foothold or
-     a prior run produced one.
-   - **Collect now** (see the **ad** skill) — `bloodhound-ce-python` /
-     `rusthound-ce` against the DC with creds. ⚠️ On a signing-enforced DC that
-     resets LDAPS, the *python* collectors can't seal and won't produce a zip —
-     use `rusthound-ce` or SharpHound from a Windows foothold there (the **ad**
-     skill's footgun notes cover this). Don't promise a collection the DC won't give.
+   - **Collect now** — `scripts/roo shell bhcollect <dc-ip> <user> <pass>` drops a
+     CE zip in the cwd. It drives rusthound-ce's Kerberos/GSSAPI path, which
+     **seals LDAP over 389**, so it works even on signing-enforced / LDAPS-resetting
+     DCs that defeat the python collectors (`bloodhound-ce-python`,
+     `nxc --bloodhound`). bhcollect auto-discovers the domain/DC and handles the
+     krb5/clock setup. (Soft DCs: `bloodhound-ce-python` works too.)
+   - **Bring a zip** — a SharpHound/rusthound/AzureHound or `nxc --bloodhound` zip
+     already on disk (e.g. SharpHound from a Windows foothold). Just ingest it.
 2. **View it.** `scripts/roo bloodhound view <zip>` — brings the stack up, ingests,
    and opens the browser. Or run the steps separately.
 3. **Explore (operator-driven).** Mark tier-zero/owned principals, run the
