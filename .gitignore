@@ -13,6 +13,9 @@ vpn/*
 hosts
 .roo/
 
+# Playwright MCP runtime scratch (browser snapshots, console logs, screenshots)
+.playwright-mcp/
+
 # Local Claude Code settings (per-user; keep settings.json shared)
 .claude/settings.local.json
 
