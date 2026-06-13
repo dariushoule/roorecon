@@ -43,6 +43,11 @@ and runs it with the cwd mounted at `/work` — editing a Dockerfile changes its
 hash, so the next run rebuilds automatically. For VPN-only targets, join the VPN
 sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
 
+**Docker Hub rate limit on a first build** (`429 / toomanyrequests / pull rate
+limit`) → the fix is **`docker login`** (authenticated pulls get a much higher
+limit), then re-run. Don't retag/alias base images or edit Dockerfiles to dodge
+it — `roo` prints this hint on a rate-limited build.
+
 **Which box has which tool (don't guess).** `roo run <tool>` works *only* for
 tools with a `docker/<tool>/Dockerfile` (`nmap`, `gobuster`) — `roo run curl …`
 fails, there's no such image. Ad-hoc clients (curl, wget, nc, socat, dig,
@@ -82,6 +87,9 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
 - **Require a tunnel first.** Check `scripts/roo vpn status`; if down,
   `scripts/roo vpn up`, then prefix tools with
   `ROO_NET=container:roorecon-vpn`.
+- **`.ovpn` configs live in `./vpn/`.** Asked to "connect to `foo.ovpn`"? Run
+  `scripts/roo vpn up foo.ovpn` — a bare name resolves against `./vpn/`, so don't
+  hunt for the full path. One config there → plain `roo vpn up` auto-picks it.
 - **No `.ovpn` present → STOP and ask.** `roo vpn up` needs a `.ovpn` in `./vpn/`
   (git-ignored). Never scan a VPN-only target without one.
 - **One tunnel per `.ovpn`.** HTB/THM allow a single connection per config; a host

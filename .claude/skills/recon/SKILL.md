@@ -126,6 +126,20 @@ those — run them at the tunnel IP with `scripts/roo shell <cmd>`. `roo run` is
 only for tools with a dedicated image (nmap, gobuster); see CLAUDE.md "Which box
 has which tool."
 
+## Common snags (don't rabbit-hole)
+
+- **VPN configs live in `./vpn/`.** Asked to "connect to `foo.ovpn`"? Run
+  `scripts/roo vpn up foo.ovpn` — `roo` resolves a bare name against `./vpn/`, so
+  don't hunt for or guess a full path. Only one config there? Plain
+  `scripts/roo vpn up` auto-picks it.
+- **Docker Hub 429 / "toomanyrequests" on a first image build** → the fix is
+  **`docker login`** (authenticated pulls have a far higher rate limit), then
+  re-run. Don't retag/alias base images or edit Dockerfiles to dodge the limit.
+- **Waiting on a backgrounded `roo` verb (sweep/dirbust/vhost)** — they run via
+  `run_in_background` and notify on completion, so just wait, or `Read` the spool
+  (`recon-results/<target>/…` or the task output path). Never foreground-`sleep`
+  to poll: the harness blocks chained `sleep` and it burns a turn regardless.
+
 ## Interpreting output
 
 - Read `recon-results/<target>/summary.txt` first for the digest, then the

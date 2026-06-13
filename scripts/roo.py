@@ -127,9 +127,16 @@ def ensure_image(tool):
         info(f"building {ref} (first use or Dockerfile changed)…")
         r = subprocess.run(
             ["docker", "build", "-q", "-t", ref, str(DOCKER_DIR / tool)],
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
         if r.returncode != 0:
+            if r.stderr:
+                sys.stderr.write(r.stderr)
+            low = (r.stderr or "").lower()
+            if any(s in low for s in ("toomanyrequests", "pull rate limit", "429")):
+                err("Docker Hub rate-limited the base-image pull (unauthenticated limit).")
+                err("Fix: run `docker login` (an authenticated account has a much higher "
+                    "limit), then re-run — no Dockerfile changes needed.")
             die(f"failed to build image for {tool}")
     return ref
 
@@ -711,9 +718,15 @@ def _tun_addr():
 
 def _find_ovpn(explicit, vpn_dir):
     if explicit:
-        if not Path(explicit).is_file():
-            die(f"config not found: {explicit}")
-        return Path(explicit)
+        p = Path(explicit)
+        if p.is_file():
+            return p
+        # Bare name or relative path — look inside the vpn dir before failing,
+        # so `roo vpn up machines_us-dedivip-1.ovpn` works from anywhere.
+        candidate = Path(vpn_dir) / explicit
+        if candidate.is_file():
+            return candidate
+        die(f"config not found: {explicit} (looked in ./ and {vpn_dir}/)")
     matches = sorted(Path(vpn_dir).glob("*.ovpn")) if Path(vpn_dir).is_dir() else []
     if not matches:
         err("no OpenVPN config provided.")

@@ -28,23 +28,17 @@ hash), so a `git pull` is picked up with no extra step.
 Drop your engagement `.ovpn` in `./vpn/` (if the target needs one), then:
 
 ```sh
-claude "Run recon on 10.0.24.44"
+claude "Connect to machines_us-dedivip-1.ovpn and run recon on 10.0.24.44"
 ```
 
 ## Commands
 
-Recon: `sweep` (streaming TCP+UDP discovery) → `buckaroo` (per-port deep-dive,
-surfaces hostnames) → `vhost`/`dns` (name enum) and `dirbust` (recursive web
-content discovery); `report` collates it all into `report.md`. Findings stream to
-the CLI as they're found. Post-foothold, the VPN sidecar doubles as your box on
-the engagement network:
-
 | Command | Use |
 |---------|-----|
-| `roo proxy up` | SOCKS5 egress — host browser/Burp/curl reach the target through the tunnel |
-| `roo shell` | operator shell at the tunnel IP — reverse shells, payload hosting, impacket |
-| `roo fwd <port>` | bridge a tunnel port to a host listener |
-| `roo ip` | print the tunnel IP (your LHOST) |
+| `scripts/roo proxy up` | SOCKS5 egress — host browser/Burp/curl reach the target through the tunnel |
+| `scripts/roo shell` | operator shell at the tunnel IP — reverse shells, payload hosting, impacket |
+| `scripts/roo fwd <port>` | bridge a tunnel port to a host listener |
+| `scripts/roo ip` | print the tunnel IP (your LHOST) |
 
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the design (the sidecar is a
 *location*; everything else is a *tool* that runs in its namespace).
@@ -59,7 +53,9 @@ See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the design (the sidecar is a
 Drop a `.ovpn` in `./vpn/` (git-ignored) and recon the box — `roo` runs the VPN
 as a sidecar container and shares its network namespace with tool containers, so
 it works the same across platforms (where a container otherwise can't reach a
-host `tun`). You don't touch Docker networking.
+host `tun`). You don't touch Docker networking. Manage the tunnel with
+`scripts/roo vpn up|down|status` (the agent brings it up for you, but you can
+drive it directly).
 
 **Run only one tunnel per `.ovpn`.** HTB/THM allow a single connection per
 config. A host VPN client on the same `.ovpn` fights the sidecar for the slot and
