@@ -995,22 +995,15 @@ def cmd_ip(args):
     print(addr)
 
 
-def cmd_proxy(args):
-    """SOCKS5 egress so host tools reach the target through the tunnel."""
-    require_docker()
-    if args.action == "status":
-        running = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", PROXY_CONTAINER],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip() == "true"
-        ok(f"SOCKS proxy running — host 127.0.0.1:{SOCKS_PORT}") if running else \
-            info("SOCKS proxy is not running (roo proxy up)")
-        return
-    if args.action == "down":
-        r = subprocess.run(["docker", "rm", "-f", PROXY_CONTAINER],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        ok("SOCKS proxy stopped") if r.returncode == 0 else info("no SOCKS proxy running")
-        return
-    # up
+def _proxy_running():
+    r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", PROXY_CONTAINER],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return r.stdout.strip() == "true"
+
+
+def _proxy_up():
+    """Start the SOCKS5 egress proxy in the tunnel namespace. Idempotent-ish:
+    re-creates the container. Used by `roo proxy up` and `roo browser`."""
     _require_vpn("roo proxy")
     if not _sidecar_publishes_socks():
         die("the running sidecar doesn't publish the SOCKS port — cycle the tunnel "
@@ -1027,9 +1020,12 @@ def cmd_proxy(args):
         bridge_ip = "0.0.0.0"
     subprocess.run(["docker", "rm", "-f", PROXY_CONTAINER],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Mount ./hosts as /etc/hosts so microsocks' remote DNS resolves lab names
+    # (box.htb, etc.) — the browser/curl point Chrome-style remote DNS at this
+    # proxy, and without the overrides a VPN-only vhost would never resolve.
     subprocess.run(
         ["docker", "run", "-d", "--name", PROXY_CONTAINER,
-         "--network", f"container:{VPN_CONTAINER}", ref,
+         "--network", f"container:{VPN_CONTAINER}", *_hosts_mount(), ref,
          "microsocks", "-i", bridge_ip, "-p", "1080"],
         stdout=subprocess.DEVNULL, check=True)
     # A ready-to-use proxychains config for host/container tools that want it.
@@ -1038,11 +1034,128 @@ def cmd_proxy(args):
     pc = gen_dir / "proxychains.conf"
     pc.write_text("strict_chain\nproxy_dns\n[ProxyList]\n"
                   f"socks5 127.0.0.1 {SOCKS_PORT}\n")
+    return pc
+
+
+def cmd_proxy(args):
+    """SOCKS5 egress so host tools reach the target through the tunnel."""
+    require_docker()
+    if args.action == "status":
+        ok(f"SOCKS proxy running — host 127.0.0.1:{SOCKS_PORT}") if _proxy_running() else \
+            info("SOCKS proxy is not running (roo proxy up)")
+        return
+    if args.action == "down":
+        r = subprocess.run(["docker", "rm", "-f", PROXY_CONTAINER],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ok("SOCKS proxy stopped") if r.returncode == 0 else info("no SOCKS proxy running")
+        return
+    pc = _proxy_up()
     ok(f"SOCKS proxy up — host 127.0.0.1:{SOCKS_PORT}")
     info(f"  curl:        curl --socks5h 127.0.0.1:{SOCKS_PORT} http://<target>/")
     info(f"  proxychains: proxychains -f {pc} <tool> <target>")
     info(f"  browser/Burp: SOCKS5 host 127.0.0.1 port {SOCKS_PORT} (remote DNS)")
     info("note: TCP-connect only — raw -sS/-sU scans must run as roo containers")
+
+
+# --- subcommand: browser (host browser, VPN-proxied, agent-instrumentable) --
+# A Chromium-family browser on the *host* (so you get a native GUI to drive),
+# pointed at the SOCKS proxy (so it egresses through the tunnel with remote DNS)
+# and started with a CDP debugging port so the agent can attach via the Playwright
+# MCP (.mcp.json) and drive the same browser when you ask. Companion workflow:
+# you browse; the agent taps in. The browser is the one host exception to
+# "everything in a container" — a GUI you interact with can't live in a netns.
+_BROWSER_CANDIDATES = {
+    "win32": [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+        "chrome", "msedge",
+    ],
+    "darwin": [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    ],
+    "linux": ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+              "brave-browser", "microsoft-edge", "microsoft-edge-stable"],
+}
+
+
+def _find_browser(explicit):
+    if explicit:
+        cands = [explicit]
+    elif os.environ.get("ROO_BROWSER"):
+        cands = [os.environ["ROO_BROWSER"]]
+    else:
+        key = ("win32" if sys.platform.startswith("win")
+               else "darwin" if sys.platform == "darwin" else "linux")
+        cands = _BROWSER_CANDIDATES[key]
+    for c in cands:
+        hit = shutil.which(c) or (c if Path(c).is_file() else None)
+        if hit:
+            return hit
+    return None
+
+
+def _shlex_join(parts):
+    out = []
+    for p in parts:
+        out.append(f'"{p}"' if (" " in p or "\\" in p) else p)
+    return " ".join(out)
+
+
+def cmd_browser(args):
+    """Launch a host browser, VPN-proxied and CDP-instrumentable by the agent."""
+    require_docker()
+    browser = _find_browser(args.browser)
+    if not browser:
+        die("no Chromium-family browser found. Install Chrome/Chromium/Edge/Brave, "
+            "pass --browser <path>, or set $ROO_BROWSER.")
+    proxy_flags = []
+    if not args.no_proxy:
+        _require_vpn("roo browser (proxied)")
+        if not args.dry_run and not _proxy_running():
+            info("SOCKS proxy not up — starting it")
+            _proxy_up()
+        proxy_flags = [f"--proxy-server=socks5://127.0.0.1:{SOCKS_PORT}"]
+    profile = (Path(".roo") / "browser-profile").resolve()
+    profile.mkdir(parents=True, exist_ok=True)
+    cdp = str(args.cdp_port)
+    cmd = [browser,
+           f"--user-data-dir={profile}",
+           f"--remote-debugging-port={cdp}",
+           "--remote-allow-origins=*",          # let the CDP/MCP client attach (Chrome >111)
+           "--no-first-run", "--no-default-browser-check",
+           *proxy_flags]
+    if args.url:
+        cmd.append(args.url)
+
+    info(f"browser: {browser}")
+    info(f"profile: {profile}  (persistent, git-ignored)")
+    if proxy_flags:
+        info(f"proxy:   socks5://127.0.0.1:{SOCKS_PORT}  (through the VPN tunnel, remote DNS)")
+    else:
+        err("--no-proxy: browsing DIRECT, not through the VPN tunnel")
+    info(f"CDP:     http://127.0.0.1:{cdp}  ← agent attaches here (Playwright MCP)")
+    if args.dry_run:
+        ok("dry run — would launch:")
+        print(_shlex_join(cmd))
+        return
+    try:
+        if sys.platform.startswith("win"):
+            DETACHED = 0x00000008  # DETACHED_PROCESS — don't tie the browser to roo
+            subprocess.Popen(cmd, creationflags=DETACHED, close_fds=True)
+        else:
+            subprocess.Popen(cmd, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        die(f"failed to launch browser: {e}")
+    ok(f"browser launched — CDP on http://127.0.0.1:{cdp}")
+    info("agent control: enable the `playwright` server in .mcp.json (it attaches over "
+         "CDP), then ask the agent to drive. See the browse skill.")
 
 
 def cmd_shell(args):
@@ -1198,6 +1311,18 @@ def build_parser():
     pp = sub.add_parser("proxy", help="SOCKS5 egress for host tools (browser/Burp/curl)")
     pp.add_argument("action", choices=["up", "down", "status"])
     pp.set_defaults(func=cmd_proxy)
+
+    pbr = sub.add_parser("browser", help="launch a host browser, VPN-proxied + agent-drivable (CDP)")
+    pbr.add_argument("url", nargs="?", help="optional start URL, e.g. http://box.htb/")
+    pbr.add_argument("--browser", help="path to a Chromium-family browser "
+                                       "(else auto-detect / $ROO_BROWSER)")
+    pbr.add_argument("--cdp-port", dest="cdp_port", type=int, default=9222,
+                     help="remote debugging port the agent attaches to (default 9222)")
+    pbr.add_argument("--no-proxy", dest="no_proxy", action="store_true",
+                     help="browse direct, not through the VPN SOCKS proxy")
+    pbr.add_argument("--dry-run", dest="dry_run", action="store_true",
+                     help="print the launch command without starting the browser")
+    pbr.set_defaults(func=cmd_browser)
 
     psh = sub.add_parser("shell", help="interactive operator shell in the tunnel namespace")
     psh.add_argument("args", nargs=argparse.REMAINDER,

@@ -42,6 +42,7 @@ on the engagement network:
 |---------|-----|
 | `scripts/roo vulns <target>` | CVE + public-PoC lookup for recon fingerprints (keyless; never tunneled) |
 | `scripts/roo fingerprint <url>` | web tech/version detection (whatweb) — sharper than nmap |
+| `scripts/roo browser [url]` | host browser, VPN-proxied + agent-drivable over CDP (Playwright MCP) |
 | `scripts/roo proxy up` | SOCKS5 egress — host browser/Burp/curl reach the target through the tunnel |
 | `scripts/roo shell` | operator shell at the tunnel IP — reverse shells, payload hosting, impacket |
 | `scripts/roo fwd <port>` | bridge a tunnel port to a host listener |
@@ -54,6 +55,8 @@ See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the design (the sidecar is a
 
 - **Docker** (Engine, Desktop, or OrbStack) — all tooling runs in containers.
 - **Python 3** — runs the `roo` CLI (stdlib only).
+- *Optional, for `roo browser`* — a Chromium-family browser (Chrome/Chromium/
+  Edge/Brave) on the host, plus **Node** (`npx`) for the agent's Playwright MCP.
 
 ## VPN targets
 
@@ -116,4 +119,14 @@ work:
   Miessler, Jason Haddix & contributors).
 - **Tooling** — [nmap](https://nmap.org),
   [gobuster](https://github.com/OJ/gobuster),
+  [WhatWeb](https://github.com/urbanadventurer/WhatWeb),
   [OpenVPN](https://openvpn.net), each in its own minimal container.
+- **Browser control** — [Playwright MCP](https://github.com/microsoft/playwright-mcp)
+  (Microsoft) drives the host browser over CDP for `roo browser`.
+- **Vulnerability & exploit data** (keyless) — [NVD](https://nvd.nist.gov) (NIST),
+  [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog),
+  [EPSS](https://www.first.org/epss) (FIRST),
+  [Exploit-DB](https://www.exploit-db.com) (OffSec),
+  [PoC-in-GitHub](https://github.com/nomi-sec/PoC-in-GitHub), and
+  [Metasploit Framework](https://github.com/rapid7/metasploit-framework) module
+  metadata (Rapid7 & contributors).

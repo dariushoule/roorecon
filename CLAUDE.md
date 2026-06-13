@@ -31,6 +31,7 @@ scripts/roo recon <target>                # simple one-shot phased scan
 scripts/roo report <target>               # assemble per-port facts+notes into report.md
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
 scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp/curl)
+scripts/roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
 scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
 scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
@@ -131,6 +132,13 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   sharpens web versions first. Runs post-fingerprint in recon and standalone.
   **CVE lookups egress on the public internet, never the VPN — don't prefix
   `roo vulns` with `ROO_NET`** (only `fingerprint` is target-facing).
+- **browse** (`.claude/skills/browse/SKILL.md`) — companion web browsing.
+  `scripts/roo browser [url]` launches a host Chrome routed through the VPN SOCKS
+  proxy with a CDP debug port; the agent attaches via the **Playwright MCP**
+  (`.mcp.json` `playwright` server — needs Node/`npx`) and drives the *same*
+  browser the operator uses. Great for authenticated enumeration after the
+  operator logs in. The browser is the one host (non-container) tool; its CDP
+  channel is local (`127.0.0.1:9222`), only its page traffic is tunneled.
 
 ## Ground rules
 

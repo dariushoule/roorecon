@@ -27,6 +27,13 @@ then follow its workflow and drive its helper scripts.
   versions first. CVE lookups hit the public internet, **never the VPN** — don't
   prefix `roo vulns` with `ROO_NET`. Use for: "CVE", "known vulnerabilities",
   "exploits for X", "is X vulnerable", "public PoC", "searchsploit".
+- **browse** → `.claude/skills/browse/SKILL.md`
+  Companion web browsing: `scripts/roo browser [url]` launches a host browser
+  routed through the VPN (SOCKS) with a CDP port; the agent attaches via the
+  Playwright MCP (`.mcp.json`, needs Node) and drives the same browser the
+  operator uses — authenticated enumeration, network/console capture, repro flows.
+  CDP is local (127.0.0.1:9222); only page traffic is tunneled. Use for: "open a
+  browser", "drive the browser", "poke around the web app", "log in and explore".
 
 ## Containerized tooling (convention)
 
@@ -48,6 +55,7 @@ scripts/roo recon <target>                # simple one-shot phased scan
 scripts/roo report <target>               # assemble per-port facts+notes into report.md
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
 scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp)
+scripts/roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
 scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
 scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
