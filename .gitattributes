@@ -1,0 +1,7 @@
+# Shell scripts that run inside Linux containers (or unix shells) MUST stay LF.
+# The host may be Windows with core.autocrlf=true; a CRLF checkout would break a
+# script's shebang when it's COPY'd into an image and executed there. `roo` builds
+# images from the working tree, so the working-tree EOL matters, not just the repo's.
+*.sh            text eol=lf
+scripts/roo     text eol=lf
+docker/net-toolbox/clocksync text eol=lf

@@ -28,3 +28,5 @@ nul
 __pycache__/
 *.pyc
 *.pyo
+# Kerberos ccaches (tickets = secrets)
+*.ccache

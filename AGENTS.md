@@ -15,6 +15,23 @@ then follow its workflow and drive its helper scripts.
   assembles the final document. Produces a prioritized attack list.
   Use for: "recon", "enumerate", "scan", "what's open on this box", "where do
   I start on this target".
+- **ad** → `.claude/skills/ad/SKILL.md`
+  Active Directory enumeration + attack-path runbook. Recon hands off here on a
+  DC profile (Kerberos+LDAP+SMB), or start here when you hold domain creds. Drives
+  `net-toolbox` AD tooling (`nxc`, `bloodyAD`, `certipy`, `evil-winrm`, impacket) via
+  `scripts/roo shell`: domain ID → unauth footholds → credentialed sweep
+  (shares/users/roast/BloodHound/ADCS) → triage to DA (delegation, ESCs,
+  BadSuccessor on Server 2025, DCSync). Carries the auth footgun cheat-sheet
+  (MD4, clock skew→faketime, LDAP signing→nxc). Use for: "active directory",
+  "domain controller", "I have domain creds", "kerberoast", "bloodhound",
+  "certipy/ADCS", "BadSuccessor", "DCSync", "evil-winrm", "what can I do on this DC".
+- **bloodhound** → `.claude/skills/bloodhound/SKILL.md`
+  Stand up BloodHound CE locally and load AD collection data to view the attack
+  graph. `scripts/roo bloodhound view <zip>` brings up the host-local CE stack
+  (postgres+neo4j+web, *not* in the tunnel), ingests a collection over the REST
+  API, and opens it in the browser. Analysis not attack; collection is the **ad**
+  skill's job. Use for: "open bloodhound", "visualize the domain", "graph the AD",
+  "show me paths to DA", "ingest this collection".
 - **dirbust** → `.claude/skills/dirbust/SKILL.md`
   Recursive web content discovery: `scripts/roo dirbust <url>` drives gobuster
   breadth-first over discovered directories (SecLists baked in), streaming hits.
@@ -65,6 +82,7 @@ scripts/roo report <target>               # assemble per-port facts+notes into r
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
 scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp)
 scripts/roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
+scripts/roo bloodhound <up|ingest|view|open|down> [zip]   # local BloodHound CE: ingest + view the graph
 scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
 scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener

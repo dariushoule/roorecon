@@ -32,6 +32,7 @@ scripts/roo report <target>               # assemble per-port facts+notes into r
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
 scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp/curl)
 scripts/roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
+scripts/roo bloodhound <up|ingest|view|open|down> [zip]   # local BloodHound CE: ingest a collection, view the graph
 scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
 scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
@@ -55,8 +56,13 @@ it — `roo` prints this hint on a rate-limited build.
 **Which box has which tool (don't guess).** `roo run <tool>` works *only* for
 tools with a `docker/<tool>/Dockerfile` (`nmap`, `gobuster`) — `roo run curl …`
 fails, there's no such image. Ad-hoc clients (curl, wget, nc, socat, dig,
-impacket) live in `net-toolbox`; reach them at the tunnel IP with
-**`scripts/roo shell <cmd>`** (e.g. `scripts/roo shell curl -s http://target/`).
+smbclient, ldapsearch, impacket) and the AD attack tooling (`nxc`/NetExec,
+`bloodyAD`, `certipy`, `evil-winrm` + `evil-winrm-py`, BloodHound collectors,
+plus `faketime` and `rlwrap`) live in
+`net-toolbox`; reach them at the tunnel IP with **`scripts/roo shell <cmd>`**
+(e.g. `scripts/roo shell nxc smb <target> -u U -p P --shares`). For a Domain
+Controller, follow the **ad** skill — it sequences these into a runbook and
+carries the auth footgun fixes (MD4, clock skew, LDAP signing).
 Rule of thumb: a scanner with its own image → `roo run`; anything else you'd run
 on a jump box → `roo shell`. For web content discovery use
 **`scripts/roo dirbust <url>`**, not raw `gobuster dir` — it manages recursion
@@ -122,6 +128,14 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   `scripts/roo buckaroo` deep-dives each one; simple path: `scripts/roo recon`.
   Findings stream to the CLI as found; `scripts/roo report` assembles the final
   document. Produces a prioritized "attack this first" list.
+- **ad** (`.claude/skills/ad/SKILL.md`) — Active Directory enumeration +
+  attack-path runbook. Recon hands off here on a DC profile (Kerberos+LDAP+SMB),
+  or start here when you hold domain creds. Drives the `net-toolbox` AD tooling
+  (`nxc`, `certipy`, `evil-winrm`, impacket) via `scripts/roo shell`: domain ID →
+  unauth footholds → credentialed sweep (shares/users/roast/BloodHound/ADCS) →
+  triage to Domain Admin (delegation, ADCS ESCs, BadSuccessor on Server 2025,
+  DCSync). Carries the auth footgun cheat-sheet (MD4, clock skew → `faketime`,
+  LDAP signing → `nxc`).
 - **dirbust** (`.claude/skills/dirbust/SKILL.md`) — recursive web content
   discovery. `scripts/roo dirbust <url>` drives gobuster breadth-first over
   discovered directories (SecLists baked in), streaming each hit live.
@@ -139,6 +153,12 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   browser the operator uses. Great for authenticated enumeration after the
   operator logs in. The browser is the one host (non-container) tool; its CDP
   channel is local (`127.0.0.1:9222`), only its page traffic is tunneled.
+- **bloodhound** (`.claude/skills/bloodhound/SKILL.md`) — stand up BloodHound CE
+  locally and load AD collection data to see the attack graph. `scripts/roo
+  bloodhound view <zip>` brings up the (host-local, non-tunneled) CE stack, ingests
+  a SharpHound/rusthound/nxc collection over the REST API, and opens it in the
+  browser. Analysis, not attack — collection is the **ad** skill's job; the
+  compose stack is a documented architecture exception (see ARCHITECTURE.md).
 - **teardown** (`.claude/skills/teardown/SKILL.md`) — clean end-of-engagement
   shutdown. Closes the browser, drops the proxy then the VPN tunnel (last), tidies
   Playwright MCP scratch (`.playwright-mcp/`) out of the tree, and verifies no

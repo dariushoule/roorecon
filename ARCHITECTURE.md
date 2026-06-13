@@ -52,9 +52,10 @@ that must vary independently:
 | Image | Role | Notes |
 |-------|------|-------|
 | `openvpn` | **location** — owns the tunnel + namespace | minimal: `openvpn` + `iproute2`. No tools. |
-| `net-toolbox` | **operator tools** | `ncat`, `socat`, `python3`, `impacket`, `microsocks`, `tmux`. One image, three run-modes (`shell`/`proxy`/`fwd`). |
+| `net-toolbox` | **operator tools** | `ncat`/`socat`/`microsocks`, impacket, and the AD kit (`nxc`, `bloodyAD`, `certipy`, `evil-winrm`(+`-py`), BloodHound collectors), `smbclient`/`ldapsearch`/`dig`, `faketime`/`rlwrap`. One image, three run-modes (`shell`/`proxy`/`fwd`). |
 | `nmap` | **recon scanner** | `NET_RAW` for SYN/UDP/OS scans. Kept apart from operator tools: different privilege, different phase. |
 | `gobuster` | **recon scanner** | vhost/DNS name enum + recursive content discovery (`dirbust`); SecLists baked in. |
+| `bloodhound` (compose) | **local analysis platform** | 3-service CE stack (postgres + neo4j + web). *Not* a per-tool image, *not* in the tunnel — see the exception below. |
 
 `net-toolbox` is deliberately *one* image used three ways rather than three
 near-identical images — microsocks-as-egress, socat-as-forwarder, and the
@@ -64,6 +65,29 @@ interactive shell are all "operator tools," differing only in how they're run:
   pivots), with `/work` mounted so loot lands on the host.
 - `roo proxy` — detached `microsocks` (SOCKS5 egress for host tools).
 - `roo fwd`   — detached `socat` (bridge a tunnel port to a host listener).
+
+### Two deliberate exceptions to "one minimal Dockerfile per tool, in the namespace"
+
+Both exist because a capability is fundamentally **not a target-facing tool** and so
+doesn't fit the per-image, in-the-tunnel model. Name them so they don't become a
+licence to sprawl:
+
+1. **The host browser** (`roo browser`) — a GUI you interact with can't live in a
+   netns. It runs on the host, pointed at the VPN SOCKS proxy so only its *page
+   traffic* is tunneled; the agent drives it over a local CDP port (Playwright MCP).
+2. **BloodHound CE** (`roo bloodhound`) — a **local analysis platform**, not a
+   tool that acts on the target. It's a 3-service stack (postgres + neo4j + the
+   BloodHound API/web), so it's run via `docker compose`
+   (`docker/bloodhound/docker-compose.yml`), not a hash-tagged per-tool image. It
+   ingests *static collection files* and renders the graph for the operator, so it
+   **never joins the tunnel namespace** — it binds `127.0.0.1` on the docker host
+   and you view it in the browser. The target-facing half (collecting the data from
+   the DC) stays a normal namespace tool in `net-toolbox` (`nxc`, the BloodHound
+   collectors); only the *visualization* is this exception.
+
+The rule the exceptions still honour: **target-facing work runs as a tool in the
+tunnel namespace.** A GUI and a local graph DB aren't that, so they're allowed out
+— anything that scans, auths to, or exploits the target is not.
 
 ## The sidecar is your box on the engagement network
 

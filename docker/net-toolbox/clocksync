@@ -1,0 +1,42 @@
+#!/bin/sh
+# clocksync — put THIS shell's clock on a target's time so Kerberos stops throwing
+# KRB_AP_ERR_SKEW, *without* touching the host clock.
+#
+# A container can't own a real wall clock: Linux doesn't virtualise CLOCK_REALTIME
+# per namespace, so `date -s`/`rdate -n` with CAP_SYS_TIME would move the HOST's
+# clock (and every other container). Instead we emulate it — this writes a
+# libfaketime spec to $FAKETIME_TIMESTAMP_FILE, and the libfaketime that `roo shell`
+# LD_PRELOADs applies it to every command you run next. Per-shell and ephemeral
+# (re-run each session). Think "rdate -n <target>", scoped to this container.
+#
+#   clocksync <target>     sync to that host's clock (reads its time over SMB)
+#   clocksync --off        back to real time
+#   clocksync              show the current offset
+F="${FAKETIME_TIMESTAMP_FILE:-/tmp/.roo-faketime}"
+
+case "${1:-}" in
+    ""|--status|status)
+        if [ -s "$F" ]; then
+            echo "[*] offset ACTIVE ($(cat "$F")) — clock now reads $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+        else
+            echo "[*] no offset — real clock ($(date -u '+%Y-%m-%d %H:%M:%S') UTC)"
+        fi
+        exit 0 ;;
+    --off|off|reset|clear)
+        : > "$F" 2>/dev/null || true
+        echo "[+] cleared — back to real time"
+        exit 0 ;;
+esac
+
+target="$1"
+# DumpNTLMInfo reads the DC's clock over SMB; the local (possibly already-faked)
+# clock doesn't affect that, so this is safe to run even when an offset is active.
+t=$(DumpNTLMInfo.py "$target" 2>/dev/null | sed -n 's/.*Current Time *: *//p' | cut -c1-19)
+if [ -z "$t" ]; then
+    echo "[!] could not read a clock from $target (is SMB/445 reachable?)" >&2
+    exit 1
+fi
+printf '@%s\n' "$t" > "$F"
+echo "[+] synced to $target — clock now $t UTC; Kerberos tools follow this automatically."
+echo "    e.g.  getTGT.py -dc-ip $target dom/user:pass   then   nxc smb $target --use-kcache"
+echo "    undo: clocksync --off"

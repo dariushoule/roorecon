@@ -35,6 +35,7 @@ Authorized targets only — CTF boxes, lab ranges, or signed-scope hosts.
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -42,6 +43,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 # Force UTF-8 on our own streams. Windows consoles default to a legacy code
@@ -211,6 +214,21 @@ def _hosts_mount():
 
 def _work_mount():
     return _bind(Path.cwd(), "/work") + ["-w", "/work"]
+
+
+def _home_mount():
+    """Persist the container's HOME across `roo shell` runs.
+
+    net-toolbox runs as root, and several tools write under $HOME, not /work:
+    NetExec keeps workspaces/logs/loot/downloads under ~/.nxc, certipy caches
+    there, Kerberos ccaches default to ~ too. Without this, that state lives only
+    in the --rm container and vanishes on exit — which forces needless re-runs
+    (e.g. spider_plus output written to ~/.nxc disappears). Mount a git-ignored
+    host dir at /root so it survives between invocations.
+    """
+    home = Path(".roo") / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    return _bind(home, "/root")
 
 
 def _rel_out(out):
@@ -1146,6 +1164,16 @@ def _shlex_join(parts):
     return " ".join(out)
 
 
+def _spawn_detached(cmd):
+    """Launch a GUI process detached from roo so it outlives this CLI call."""
+    if sys.platform.startswith("win"):
+        DETACHED = 0x00000008  # DETACHED_PROCESS — don't tie the browser to roo
+        subprocess.Popen(cmd, creationflags=DETACHED, close_fds=True)
+    else:
+        subprocess.Popen(cmd, start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def cmd_browser(args):
     """Launch a host browser, VPN-proxied and CDP-instrumentable by the agent."""
     require_docker()
@@ -1184,12 +1212,7 @@ def cmd_browser(args):
         print(_shlex_join(cmd))
         return
     try:
-        if sys.platform.startswith("win"):
-            DETACHED = 0x00000008  # DETACHED_PROCESS — don't tie the browser to roo
-            subprocess.Popen(cmd, creationflags=DETACHED, close_fds=True)
-        else:
-            subprocess.Popen(cmd, start_new_session=True,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _spawn_detached(cmd)
     except OSError as e:
         die(f"failed to launch browser: {e}")
     ok(f"browser launched — CDP on http://127.0.0.1:{cdp}")
@@ -1207,13 +1230,25 @@ def cmd_shell(args):
     if not cmd_args:
         addr = _tun_addr()
         info(f"toolbox in the tunnel namespace — LHOST is {addr}, /work is your cwd")
-        info("  reverse shell:  ncat -lvnp 4444")
+        info("  reverse shell:  rlwrap ncat -lvnp 4444   (rlwrap = arrows/history)")
         info("  host a file:    python3 -m http.server 8000")
+        info("  AD enum:        nxc smb|ldap|winrm <t> -u U -p P [--shares|--bloodhound]")
+        info("  AD CS / shell:  certipy find -u U@dom -p P -dc-ip <t>  ·  evil-winrm -i <t> -u U -p P")
+        info("  ad-hoc clients: smbclient // ldapsearch // dig // bloodyAD")
+        info("  Kerberos skew:  clocksync <dc-ip>   (syncs this shell's clock to the DC; clocksync --off)")
     cmd = ["docker", "run", "--rm"]
     if interactive:
         cmd.append("-it")
-    cmd += (["--network", f"container:{VPN_CONTAINER}"]
-            + _hosts_mount() + _work_mount() + [ref] + list(cmd_args))
+    # Preload libfaketime so `clocksync <dc>` can put the whole shell on the DC's
+    # clock (beats KRB_AP_ERR_SKEW) without CAP_SYS_TIME or touching the host clock
+    # — a container can't own a real wall clock (CLOCK_REALTIME isn't namespaced).
+    # The timestamp file lives in the container's ephemeral /tmp, so each shell
+    # starts on real time and you re-sync per session; no offset = libfaketime no-op.
+    LIBFAKETIME = "/usr/lib/x86_64-linux-gnu/faketime/libfaketimeMT.so.1"
+    cmd += (["--network", f"container:{VPN_CONTAINER}",
+             "-e", f"LD_PRELOAD={LIBFAKETIME}",
+             "-e", "FAKETIME_TIMESTAMP_FILE=/tmp/.roo-faketime"]
+            + _hosts_mount() + _home_mount() + _work_mount() + [ref] + list(cmd_args))
     r = subprocess.run(cmd)
     sys.exit(r.returncode)
 
@@ -1257,6 +1292,184 @@ def cmd_fwd(args):
     info(f"  start your host listener first, e.g.:  nc -lvnp {port}")
     info(f"  set the target's callback to {tun_ip}:{port}")
     info(f"  stop it with:  roo fwd {port} --stop")
+
+
+# --- subcommand: bloodhound (LOCAL CE analysis stack — the compose exception) --
+# BloodHound CE is a 3-service stack (postgres + neo4j + the BloodHound API/web),
+# not a per-tool image — and it is a *local analysis platform*, never target-facing.
+# It ingests static collection zips and renders the graph for the operator, so
+# unlike every other tool it does NOT join the VPN namespace: it runs on the docker
+# host and you view it at 127.0.0.1:8080. `roo` just automates the tedium — bring
+# the stack up, seed a known admin (in the compose env), ingest a zip over the REST
+# API, open the browser. See ARCHITECTURE.md ("local analysis platform" exception).
+BH_COMPOSE = DOCKER_DIR / "bloodhound" / "docker-compose.yml"
+BH_PROJECT = "roorecon-bloodhound"
+BH_URL = "http://127.0.0.1:8080"
+# Must match the compose defaults (bhe_default_admin_*) so the API login works.
+BH_ADMIN_USER = os.environ.get("BHE_ADMIN_USER", "admin")
+BH_ADMIN_PASS = os.environ.get("BHE_ADMIN_PASS", "BloodHoundRoo!2026")
+
+
+def _require_compose():
+    if subprocess.run(["docker", "compose", "version"],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        die("`docker compose` (v2) not found — needed for the BloodHound CE stack. "
+            "Update Docker Desktop or install the compose plugin.")
+
+
+def _compose(*args, check=True):
+    cmd = ["docker", "compose", "-p", BH_PROJECT, "-f", str(BH_COMPOSE), *args]
+    r = subprocess.run(cmd)
+    if check and r.returncode != 0:
+        die(f"`docker compose {' '.join(args)}` failed ({r.returncode})")
+    return r
+
+
+def _bh_http(method, path, token=None, data=None, body=None, ctype=None, timeout=30):
+    """Minimal HTTP to the BloodHound API. Returns (status, bytes); never raises on
+    an HTTP error status (returns it) — only on a transport failure."""
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    payload = None
+    if data is not None:                       # JSON body
+        payload = json.dumps(data).encode()
+        headers["Content-Type"] = "application/json"
+    elif body is not None:                     # raw bytes body (a collection file)
+        payload = body
+        headers["Content-Type"] = ctype or "application/octet-stream"
+    req = urllib.request.Request(BH_URL + path, data=payload, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
+def _bh_running():
+    r = subprocess.run(["docker", "compose", "-p", BH_PROJECT, "-f", str(BH_COMPOSE),
+                        "ps", "-q", "bloodhound"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return bool(r.stdout.strip())
+
+
+def _bh_ready():
+    """True once the web API answers (any HTTP status = up; refused = not yet)."""
+    try:
+        with urllib.request.urlopen(BH_URL + "/api/version", timeout=5):
+            return True
+    except urllib.error.HTTPError:
+        return True            # answered (e.g. 401) → server is up
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def _bh_wait_ready(timeout=180):
+    info("waiting for the BloodHound API to come up…")
+    for _ in range(max(1, timeout // 3)):
+        if _bh_ready():
+            return True
+        time.sleep(3)
+    return _bh_ready()
+
+
+def _bh_login():
+    status, raw = _bh_http("POST", "/api/v2/login",
+                           data={"login_method": "secret",
+                                 "username": BH_ADMIN_USER, "secret": BH_ADMIN_PASS})
+    if status != 200:
+        die(f"BloodHound login failed ({status}) as {BH_ADMIN_USER}. If you changed "
+            f"the admin password, set $BHE_ADMIN_PASS. Body: {raw[:200]!r}")
+    token = json.loads(raw or b"{}").get("data", {}).get("session_token")
+    if not token:
+        die("BloodHound login returned no session token")
+    return token
+
+
+def _bh_ingest(token, zip_path):
+    p = Path(zip_path)
+    if not p.is_file():
+        die(f"collection file not found: {zip_path}")
+    ctype = "application/zip" if p.suffix.lower() == ".zip" else "application/json"
+    status, raw = _bh_http("POST", "/api/v2/file-upload/start", token=token)
+    if status not in (200, 201):
+        die(f"could not start the upload job ({status}): {raw[:200]!r}")
+    job = json.loads(raw)["data"]["id"]
+    info(f"upload job {job} — sending {p.name} ({p.stat().st_size} bytes)…")
+    status, raw = _bh_http("POST", f"/api/v2/file-upload/{job}", token=token,
+                           body=p.read_bytes(), ctype=ctype, timeout=300)
+    if status not in (200, 202):
+        die(f"file upload failed ({status}): {raw[:200]!r}")
+    status, raw = _bh_http("POST", f"/api/v2/file-upload/{job}/end", token=token)
+    if status not in (200, 201):
+        die(f"could not finalize the upload job ({status}): {raw[:200]!r}")
+    ok(f"ingested {p.name} (job {job}) — BloodHound is processing + analysing it now")
+
+
+def _bh_open():
+    browser = _find_browser(None)
+    if not browser:
+        info(f"open {BH_URL} in your browser  (login {BH_ADMIN_USER} / {BH_ADMIN_PASS})")
+        return
+    profile = (Path(".roo") / "bloodhound-profile").resolve()
+    profile.mkdir(parents=True, exist_ok=True)
+    # Local stack → NO VPN proxy (unlike `roo browser`). A CDP port is still opened
+    # so the agent can attach via the Playwright MCP and run queries/screenshots.
+    cmd = [browser, f"--user-data-dir={profile}", "--no-first-run",
+           "--no-default-browser-check", "--remote-debugging-port=9222",
+           "--remote-allow-origins=*", BH_URL]
+    try:
+        _spawn_detached(cmd)
+    except OSError as e:
+        die(f"failed to launch browser: {e}")
+    ok(f"browser → {BH_URL}  (login {BH_ADMIN_USER} / {BH_ADMIN_PASS})")
+
+
+def cmd_bloodhound(args):
+    """Local BloodHound CE: bring the stack up, ingest a collection, view the graph."""
+    require_docker()
+    if not BH_COMPOSE.is_file():
+        die(f"compose file missing: {BH_COMPOSE}")
+    _require_compose()
+
+    if args.action == "down":
+        info("stopping the BloodHound CE stack…")
+        _compose("down", *(["-v"] if args.wipe else []), check=False)
+        ok("BloodHound CE stopped" + (" + data volumes wiped" if args.wipe else ""))
+        return
+
+    if args.action == "status":
+        if _bh_running() and _bh_ready():
+            ok(f"BloodHound CE up — {BH_URL}  (login {BH_ADMIN_USER} / {BH_ADMIN_PASS})")
+        elif _bh_running():
+            info("stack containers are up but the API isn't ready yet")
+        else:
+            info("BloodHound CE is not running  (roo bloodhound up)")
+        return
+
+    if args.action == "open":
+        if not _bh_ready():
+            die("BloodHound isn't up — run `roo bloodhound up` first")
+        _bh_open()
+        return
+
+    # up | ingest | view → ensure the stack is running and ready
+    if not _bh_running():
+        info("starting BloodHound CE (first run pulls ~2 GB: postgres + neo4j + bloodhound)…")
+        _compose("up", "-d")
+    if not _bh_wait_ready():
+        die(f"BloodHound API did not come up. Check: docker compose -p {BH_PROJECT} "
+            f"-f {BH_COMPOSE} logs")
+    ok(f"BloodHound CE up — {BH_URL}  (login {BH_ADMIN_USER} / {BH_ADMIN_PASS})")
+
+    if args.action in ("ingest", "view"):
+        if not args.zip:
+            die(f"`roo bloodhound {args.action}` needs a collection zip/json path")
+        _bh_ingest(_bh_login(), args.zip)
+    if args.action == "view":
+        _bh_open()
+    elif args.action == "up":
+        info("next:  roo bloodhound ingest <zip>   ·   open the UI:  roo bloodhound open")
 
 
 # --- CLI --------------------------------------------------------------------
@@ -1375,6 +1588,15 @@ def build_parser():
     pf.add_argument("port", help="port to forward (same number on tunnel and host)")
     pf.add_argument("--stop", action="store_true", help="tear down the forward for this port")
     pf.set_defaults(func=cmd_fwd)
+
+    pbh = sub.add_parser("bloodhound",
+                         help="local BloodHound CE: ingest a collection zip and view the graph")
+    pbh.add_argument("action", choices=["up", "ingest", "open", "view", "down", "status"],
+                     help="up | ingest <zip> | open | view <zip> (up+ingest+open) | down | status")
+    pbh.add_argument("zip", nargs="?", help="collected zip/json (for ingest/view)")
+    pbh.add_argument("--wipe", action="store_true",
+                     help="down: also delete the neo4j/postgres data volumes")
+    pbh.set_defaults(func=cmd_bloodhound)
     return p
 
 
