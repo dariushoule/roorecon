@@ -104,11 +104,19 @@ def _dockerfile(tool):
 
 
 def image_ref(tool):
-    df = _dockerfile(tool)
-    if not df.is_file():
+    d = DOCKER_DIR / tool
+    if not (d / "Dockerfile").is_file():
         return None
-    digest = hashlib.sha256(df.read_bytes()).hexdigest()[:12]
-    return f"{IMAGE_PREFIX}/{tool}:{digest}"
+    # Tag by a hash of the whole build context (Dockerfile + any COPY'd files like
+    # docker/vuln/vuln_lookup.py), not just the Dockerfile — so editing a copied
+    # asset also bumps the tag and forces a rebuild on the next run.
+    h = hashlib.sha256()
+    for f in sorted(p for p in d.rglob("*") if p.is_file()):
+        h.update(f.relative_to(d).as_posix().encode())
+        h.update(b"\0")
+        h.update(f.read_bytes())
+        h.update(b"\0")
+    return f"{IMAGE_PREFIX}/{tool}:{h.hexdigest()[:12]}"
 
 
 def _image_exists(ref):
@@ -138,6 +146,26 @@ def ensure_image(tool):
                 err("Fix: run `docker login` (an authenticated account has a much higher "
                     "limit), then re-run — no Dockerfile changes needed.")
             die(f"failed to build image for {tool}")
+    return ref
+
+
+def try_image(tool):
+    """Like ensure_image but non-fatal — returns None instead of dying.
+
+    For *best-effort enrichment* (e.g. whatweb inside a buckaroo): a missing or
+    unbuildable image should skip that extra, not abort the primary scan.
+    """
+    ref = image_ref(tool)
+    if ref is None:
+        return None
+    if _image_exists(ref):
+        return ref
+    info(f"building {ref} (first use)…")
+    r = subprocess.run(["docker", "build", "-q", "-t", ref, str(DOCKER_DIR / tool)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if r.returncode != 0:
+        err(f"could not build {tool} image; skipping this step")
+        return None
     return ref
 
 
@@ -214,20 +242,25 @@ def _cpath(p):
 
 
 def _docker_run(tool, ref, tool_args, *, name=None, tty=False, stream=False,
-                quiet=False, extra_mounts=None):
+                quiet=False, extra_mounts=None, use_net=True):
     """Build (and optionally launch) a `docker run` for a tool image.
 
     stream=True -> Popen with stdout piped (for the sweep reader); otherwise a
     blocking subprocess.run. quiet=True silences the tool's stdout/stderr (used
     when we only care about the -oA/-oN files it writes). extra_mounts injects
     additional --mount specs (e.g. a custom wordlist).
+
+    use_net=True applies $ROO_NET (e.g. the VPN tunnel namespace). Pass
+    use_net=False for tools whose traffic goes to the *public internet*, not the
+    target — e.g. CVE lookups — so they egress on the default docker network and
+    are never forced through the engagement tunnel.
     """
     cmd = ["docker", "run", "--rm"]
     if tty and sys.stdin.isatty() and sys.stdout.isatty():
         cmd.append("-it")
     if name:
         cmd += ["--name", name]
-    cmd += (_caps(tool) + _net() + _hosts_mount() + (extra_mounts or [])
+    cmd += (_caps(tool) + (_net() if use_net else []) + _hosts_mount() + (extra_mounts or [])
             + _work_mount() + [ref] + list(tool_args))
     if stream:
         return subprocess.Popen(
@@ -361,6 +394,36 @@ def _extract_hostnames(text, target):
     return sorted(names)
 
 
+def _buckaroo_whatweb(svc, target, port, d):
+    """Run whatweb on a web service; write fingerprint.json, return a summary str.
+
+    Best-effort enrichment for buckaroo — returns "" (and never raises) if the
+    service isn't web, the image can't build, or whatweb finds nothing.
+    """
+    if not re.search(r"http", svc or ""):
+        return ""
+    wref = try_image("whatweb")
+    if not wref:
+        return ""
+    scheme = "https" if (re.search(r"https|ssl", svc) or port in ("443", "8443")) else "http"
+    url = f"{scheme}://{target}:{port}/"
+    info(f"web service → whatweb fingerprint ({url})")
+    fp_json = _cpath(d / "fingerprint.json")
+    try:
+        proc = _docker_run("whatweb", wref,
+                           ["--color=never", "-a", "3", f"--log-json={fp_json}", url],
+                           stream=True)
+        lines = [ln.strip() for ln in proc.stdout if ln.strip()]
+        proc.wait()
+    except Exception as e:  # noqa: BLE001 — enrichment must not fail the buckaroo
+        err(f"whatweb fingerprint failed: {e}")
+        return ""
+    summary = "\n".join(lines)
+    if lines:
+        ok(f"web fingerprint tcp/{port}: {lines[0][:200]}")
+    return summary
+
+
 def cmd_buckaroo(args):
     require_docker()
     if args.proto not in ("tcp", "udp"):
@@ -374,7 +437,13 @@ def cmd_buckaroo(args):
 
     info(f"buckaroo on {proto}/{port} @ {target} — focused service scan")
     nmap_out = _cpath(d / "nmap.txt")
-    _docker_run("nmap", ref, ["-Pn", "-n", *scan, f"-p{port}", "-oN", nmap_out, target], quiet=True)
+    # -oX as well: nmap emits per-service app CPEs (cpe:/a:vendor:product:version)
+    # only in XML, and `roo vulns` uses them for accurate CVE lookups. Additive —
+    # nmap.txt is unchanged, this just adds nmap.xml alongside it.
+    nmap_xml = _cpath(d / "nmap.xml")
+    _docker_run("nmap", ref,
+                ["-Pn", "-n", *scan, f"-p{port}", "-oN", nmap_out, "-oX", nmap_xml, target],
+                quiet=True)
 
     nmap_txt = (d / "nmap.txt").read_text() if (d / "nmap.txt").exists() else ""
     svc = _service_from(nmap_txt, port, proto)
@@ -399,6 +468,14 @@ def cmd_buckaroo(args):
         nse_lines = [ln for ln in scripts_txt.splitlines() if ln.startswith("|")]
         facts += ["", "## NSE script output", "```",
                   "\n".join(nse_lines) if nse_lines else "(no script output)", "```"]
+
+    # Web service → sharpen past nmap with whatweb (tech/version from headers,
+    # cookies, body, meta). Best-effort: a whatweb miss never fails the buckaroo.
+    # Writes fingerprint.json (which `roo vulns` mines for app/version CVEs) and
+    # folds a summary into facts.md. Honors ROO_NET like the nmap scans above.
+    web_summary = _buckaroo_whatweb(svc, target, port, d)
+    if web_summary:
+        facts += ["", "## Web fingerprint (whatweb)", "```", web_summary, "```"]
 
     # Surface hostnames the box revealed (redirect target / cert CN+SAN). The
     # orchestrator adds these to ./hosts and feeds them to vhost/dns enum.
@@ -680,6 +757,9 @@ def cmd_report(args):
         details.append("\n".join(block))
 
     hostnames = [h for h in _read(outdir / "hostnames.txt").split() if h]
+    # The template already supplies the section heading, so drop the aggregate
+    # vulns.md's own top-level "# …" title to avoid nesting an H1 under an H2.
+    vulns_md = re.sub(r"\A#\s+.*\n+", "", _read(outdir / "vulns.md").strip())
     tokens = {
         "TARGET": target,
         "SWEEP_STATUS": "complete" if (outdir / "sweep.done").is_file()
@@ -690,6 +770,8 @@ def cmd_report(args):
                       if hostnames
                       else "_none discovered. Buckaroo a web port to harvest redirect/cert names._"),
         "PER_PORT_DETAIL": "\n\n".join(details) if details else "_no ports enumerated yet._",
+        "VULN_FINDINGS": (vulns_md if vulns_md
+                          else f"_no vuln-research yet. Run `roo vulns {target}` to populate._"),
     }
     md = template.read_text(encoding="utf-8")
     # Strip a leading HTML comment block — it's editor-only help (the token list)
@@ -700,6 +782,60 @@ def cmd_report(args):
     report = outdir / "report.md"
     report.write_text(md, encoding="utf-8")
     ok(f"report written — {report}  ({len(port_dirs)} port(s), template {template.name})")
+
+
+# --- subcommand: fingerprint (web tech/version detection via whatweb) -------
+def cmd_fingerprint(args):
+    """Web fingerprint via whatweb — sharpen tech + version detection past nmap."""
+    require_docker()
+    ref = ensure_image("whatweb")
+    host = _host_from_url(args.url)
+    outdir = _rel_out(args.out) / host
+    outdir.mkdir(parents=True, exist_ok=True)
+    jsonpath = outdir / "fingerprint.json"
+    logpath = outdir / "fingerprint.log"
+    aggr = str(args.aggression)
+    info(f"fingerprint on {args.url} — whatweb -a {aggr} (honors ROO_NET / tunnel)")
+    wargs = ["--color=never", "-a", aggr, f"--log-json={_cpath(jsonpath)}", args.url]
+    # Target-facing → use_net default True, so it reaches a VPN-only target.
+    proc = _docker_run("whatweb", ref, wargs, stream=True)
+    with logpath.open("w") as lf:
+        for line in proc.stdout:
+            lf.write(line)
+            lf.flush()
+            s = line.strip()
+            if s:
+                ok(f"fingerprint: {s}")   # surface the tech/version summary live
+    proc.wait()
+    ok(f"fingerprint done — {jsonpath} (feed sharper versions into `roo vulns`)")
+
+
+# --- subcommand: vulns (CVE + public PoC lookup; keyless sources) -----------
+def cmd_vulns(args):
+    """Look up CVEs + public PoCs for recon fingerprints (keyless sources)."""
+    require_docker()
+    ref = ensure_image("vuln")
+    out_base = _rel_out(args.out)
+    label = args.target
+    if not args.product and not (out_base / label).is_dir():
+        die(f"no recon results at {out_base / label}/ — run a sweep/buckaroo first, "
+            f"or pass --product/--version for an ad-hoc lookup")
+    argv = ["--target", label, "--out", _cpath(out_base), "--min-bucket", args.min_bucket]
+    for flag, val in (("--product", args.product), ("--version", args.version),
+                      ("--cpe", args.cpe), ("--port", args.port)):
+        if val:
+            argv += [flag, val]
+    for flag, on in (("--no-github", args.no_github), ("--no-msf", args.no_msf),
+                     ("--no-searchsploit", args.no_searchsploit), ("--refresh", args.refresh)):
+        if on:
+            argv.append(flag)
+    # CVE lookups hit the *public internet* (NVD/KEV/EPSS/GitHub), never the
+    # target — use_net=False keeps them on the default docker network even when
+    # ROO_NET points at the VPN, so engagement and research traffic stay split.
+    info(f"vuln-research on {label} — public-internet sources, not tunneled")
+    r = _docker_run("vuln", ref, argv, use_net=False)
+    if r.returncode != 0:
+        die(f"vuln-research worker exited {r.returncode}")
 
 
 # --- subcommand: vpn --------------------------------------------------------
@@ -1027,6 +1163,32 @@ def build_parser():
     prep.add_argument("--template", help="report template path (default templates/report.md "
                                          "or $ROO_REPORT_TEMPLATE)")
     prep.set_defaults(func=cmd_report)
+
+    pvln = sub.add_parser("vulns", help="CVE + public PoC lookup for recon fingerprints (keyless)")
+    pvln.add_argument("target", help="recon-results target dir name, or a label for ad-hoc --product")
+    pvln.add_argument("--product", help="ad-hoc: product name (bypasses recon dir), e.g. nginx")
+    pvln.add_argument("--version", help="ad-hoc: version, e.g. 1.18.0")
+    pvln.add_argument("--cpe", help="ad-hoc: explicit CPE, e.g. cpe:/a:openbsd:openssh:8.9p1")
+    pvln.add_argument("--port", help="restrict to one port dir, e.g. tcp-80")
+    pvln.add_argument("--min-bucket", dest="min_bucket", default="MEDIUM",
+                      choices=["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                      help="discover PoCs for CVEs at/above this severity (default MEDIUM)")
+    pvln.add_argument("--no-github", dest="no_github", action="store_true",
+                      help="skip the GitHub PoC index")
+    pvln.add_argument("--no-msf", dest="no_msf", action="store_true",
+                      help="skip the Metasploit module lookup")
+    pvln.add_argument("--no-searchsploit", dest="no_searchsploit", action="store_true",
+                      help="skip the Exploit-DB lookup")
+    pvln.add_argument("--refresh", action="store_true", help="bypass the on-disk cache")
+    pvln.add_argument("--out", default="recon-results")
+    pvln.set_defaults(func=cmd_vulns)
+
+    pfp = sub.add_parser("fingerprint", help="web fingerprint via whatweb (tech + versions)")
+    pfp.add_argument("url", help="target URL, e.g. http://box.htb/")
+    pfp.add_argument("-a", "--aggression", type=int, default=3, choices=[1, 3, 4],
+                     help="whatweb aggression (1 stealthy, 3 default, 4 heavy)")
+    pfp.add_argument("--out", default="recon-results")
+    pfp.set_defaults(func=cmd_fingerprint)
 
     pv = sub.add_parser("vpn", help="manage the OpenVPN sidecar")
     pv.add_argument("action", choices=["up", "down", "status"])

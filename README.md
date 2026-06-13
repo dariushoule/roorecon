@@ -33,8 +33,15 @@ claude "Connect to machines_us-dedivip-1.ovpn and run recon on 10.0.24.44"
 
 ## Commands
 
+The agent drives the recon pipeline for you — sweep → per-port enum →
+content/vhost discovery → **CVE & public-exploit research** (`roo vulns`, sharpened
+by `roo fingerprint`) → report. Post-foothold, the VPN sidecar doubles as your box
+on the engagement network:
+
 | Command | Use |
 |---------|-----|
+| `scripts/roo vulns <target>` | CVE + public-PoC lookup for recon fingerprints (keyless; never tunneled) |
+| `scripts/roo fingerprint <url>` | web tech/version detection (whatweb) — sharper than nmap |
 | `scripts/roo proxy up` | SOCKS5 egress — host browser/Burp/curl reach the target through the tunnel |
 | `scripts/roo shell` | operator shell at the tunnel IP — reverse shells, payload hosting, impacket |
 | `scripts/roo fwd <port>` | bridge a tunnel port to a host listener |

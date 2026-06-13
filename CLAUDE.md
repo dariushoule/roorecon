@@ -25,6 +25,8 @@ scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discov
 scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
 scripts/roo dns <domain>                  # DNS subdomain enum, external domain
 scripts/roo dirbust <url>                 # recursive directory/file brute (SecLists)
+scripts/roo fingerprint <url>             # web tech/version detection (whatweb), sharper than nmap
+scripts/roo vulns <target>                # CVE + public-PoC lookup for fingerprints (keyless)
 scripts/roo recon <target>                # simple one-shot phased scan
 scripts/roo report <target>               # assemble per-port facts+notes into report.md
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
@@ -38,9 +40,10 @@ SecLists wordlists are baked into the gobuster image (DNS/subdomain for
 `vhost`/`dns`, Web-Content for `dirbust`); each verb defaults to a fast list,
 override with `--wordlist <name|host-path>` or `$ROO_WORDLIST`.
 
-`roo` builds `docker/<tool>/Dockerfile` on demand (tagged by Dockerfile hash)
-and runs it with the cwd mounted at `/work` — editing a Dockerfile changes its
-hash, so the next run rebuilds automatically. For VPN-only targets, join the VPN
+`roo` builds `docker/<tool>/Dockerfile` on demand (tagged by a hash of the tool's
+whole build context — Dockerfile + any COPY'd files) and runs it with the cwd
+mounted at `/work` — editing the Dockerfile or a copied asset changes the hash, so
+the next run rebuilds automatically. For VPN-only targets, join the VPN
 sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
 
 **Docker Hub rate limit on a first build** (`429 / toomanyrequests / pull rate
@@ -56,7 +59,9 @@ impacket) live in `net-toolbox`; reach them at the tunnel IP with
 Rule of thumb: a scanner with its own image → `roo run`; anything else you'd run
 on a jump box → `roo shell`. For web content discovery use
 **`scripts/roo dirbust <url>`**, not raw `gobuster dir` — it manages recursion
-and wordlists.
+and wordlists. For CVE/exploit research use **`scripts/roo vulns <target>`** (and
+**`scripts/roo fingerprint <url>`** to sharpen web versions first) — see the
+vuln-research skill.
 
 **Windows/Git-Bash gotcha:** an arg that looks like a Unix path (`/wordlists/x`,
 `/usr/share/...`) gets MSYS-mangled into `C:/Program Files/Git/...` before it
@@ -119,6 +124,13 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
 - **dirbust** (`.claude/skills/dirbust/SKILL.md`) — recursive web content
   discovery. `scripts/roo dirbust <url>` drives gobuster breadth-first over
   discovered directories (SecLists baked in), streaming each hit live.
+- **vuln-research** (`.claude/skills/vuln-research/SKILL.md`) — CVE + public-PoC
+  lookup for recon fingerprints. `scripts/roo vulns <target>` maps each
+  product/version to CVEs (NVD/KEV/EPSS) and exploits (GitHub/Exploit-DB/
+  Metasploit), ranked by exploitability; `scripts/roo fingerprint <url>` (whatweb)
+  sharpens web versions first. Runs post-fingerprint in recon and standalone.
+  **CVE lookups egress on the public internet, never the VPN — don't prefix
+  `roo vulns` with `ROO_NET`** (only `fingerprint` is target-facing).
 
 ## Ground rules
 

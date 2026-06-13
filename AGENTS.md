@@ -20,6 +20,13 @@ then follow its workflow and drive its helper scripts.
   breadth-first over discovered directories (SecLists baked in), streaming hits.
   Use for: "dirbust", "directory brute", "content discovery", "find hidden
   paths/files", "fuzz endpoints".
+- **vuln-research** → `.claude/skills/vuln-research/SKILL.md`
+  CVE + public-PoC lookup for recon fingerprints: `scripts/roo vulns <target>`
+  maps product/version → CVEs (NVD/KEV/EPSS) and exploits (GitHub/Exploit-DB/
+  Metasploit), ranked; `scripts/roo fingerprint <url>` (whatweb) sharpens web
+  versions first. CVE lookups hit the public internet, **never the VPN** — don't
+  prefix `roo vulns` with `ROO_NET`. Use for: "CVE", "known vulnerabilities",
+  "exploits for X", "is X vulnerable", "public PoC", "searchsploit".
 
 ## Containerized tooling (convention)
 
@@ -35,6 +42,8 @@ scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discov
 scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
 scripts/roo dns <domain>                  # DNS subdomain enum, external domain
 scripts/roo dirbust <url>                 # recursive directory/file brute (SecLists)
+scripts/roo fingerprint <url>             # web tech/version detection (whatweb)
+scripts/roo vulns <target>                # CVE + public-PoC lookup (keyless; not tunneled)
 scripts/roo recon <target>                # simple one-shot phased scan
 scripts/roo report <target>               # assemble per-port facts+notes into report.md
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
@@ -45,8 +54,8 @@ scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host liste
 ```
 
 It builds `docker/<tool>/Dockerfile` on demand and mounts the cwd at `/work`;
-images are tagged by Dockerfile hash, so an edited Dockerfile rebuilds on the
-next run. VPN-only target? Join the sidecar's netns:
+images are tagged by a hash of the tool's build context (Dockerfile + any COPY'd
+files), so an edit to either rebuilds on the next run. VPN-only target? Join the sidecar's netns:
 `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
 
 **Architecture:** the VPN sidecar is a *location* (owns the tunnel namespace);

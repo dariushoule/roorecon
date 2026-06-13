@@ -9,6 +9,7 @@
     {{FINGERPRINT_ROWS}}  markdown table rows: | port | proto | service | version |
     {{HOSTNAMES}}         bullet list of discovered hostnames (or a placeholder)
     {{PER_PORT_DETAIL}}   each port's facts.md + operator notes.md, concatenated
+    {{VULN_FINDINGS}}     ranked CVEs + public PoCs from `roo vulns` (or a placeholder)
   Unknown tokens are left as-is. Override this file with --template or $ROO_REPORT_TEMPLATE.
 -->
 # Recon report — {{TARGET}}
@@ -31,6 +32,10 @@
 
 <!-- TODO (operator/agent): rank what to attack first and why, citing the
      port/service/version evidence below. -->
+
+## Known vulnerabilities & exploits
+
+{{VULN_FINDINGS}}
 
 ## Per-port detail
 

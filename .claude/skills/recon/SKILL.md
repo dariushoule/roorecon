@@ -33,10 +33,18 @@ this skill does not cross.
    (`roo recon`) is fine. Both write under `recon-results/<target>/`.
 3. **Triage and go deeper as results land** — the fast path does this per port
    via buckaroos; the simple path after both phases finish.
-4. **Summarize.** Give the user a ranked "attack these first" list with the
-   evidence (port, service, version, why it's interesting). Generate the report
-   artifact with `scripts/roo report <target>` → `recon-results/<target>/report.md`
-   (open-ports/fingerprint table, hostnames, per-port facts + your notes).
+4. **Research known vulns + exploits.** Once services are fingerprinted, run
+   `scripts/roo vulns <target>` to map each product/version to relevant CVEs and
+   public PoCs (GitHub/Exploit-DB/Metasploit), ranked by exploitability. Sharpen
+   shaky web versions first with `scripts/roo fingerprint <url>`. This is the
+   **vuln-research** skill — see `.claude/skills/vuln-research/SKILL.md`. Note:
+   CVE lookups go to the public internet, **not** through the VPN (don't prefix
+   `roo vulns` with `ROO_NET`).
+5. **Summarize.** Give the user a ranked "attack these first" list with the
+   evidence (port, service, version, known CVEs/PoCs, why it's interesting).
+   Generate the report artifact with `scripts/roo report <target>` →
+   `recon-results/<target>/report.md` (open-ports/fingerprint table, hostnames,
+   the vuln-research findings, per-port facts + your notes).
 
 **Surface findings as they land — don't gate on the report.** Every `roo` verb
 streams high-value findings to the CLI the instant it has them: `sweep` prints
@@ -146,12 +154,17 @@ has which tool."
   full `services.nmap` for script output and banners.
 - Map each open service to a follow-up. Examples:
   - HTTP/HTTPS → recursive content discovery (`scripts/roo dirbust <url>`, see
-    the **dirbust** skill) + vhost enum; check `robots.txt`, source, headers,
+    the **dirbust** skill) + vhost enum; buckaroo already whatweb-fingerprints the
+    port, but re-run `scripts/roo fingerprint http://<hostname>/` on a discovered
+    vhost to fingerprint the real app; check `robots.txt`, source, headers,
     default creds.
   - SMB (139/445) → `smbclient -L`, `enum4linux-ng`, null/guest sessions.
   - FTP (21) → anonymous login, writable dirs.
-  - SSH (22) → version → known CVEs; note for credential reuse later.
+  - SSH (22) → note version for the CVE lookup and for credential reuse later.
   - DB ports (3306/5432/1433/27017/6379) → default creds, unauth access.
+- **Map versions to known vulns/PoCs** with `scripts/roo vulns <target>` (the
+  **vuln-research** skill) — it ranks CVEs by exploitability and finds public
+  exploits. Run it once services are fingerprinted.
 - Keep notes per target. Recon is iterative — new creds/hosts feed back in.
 
 ## Notes for the operator
