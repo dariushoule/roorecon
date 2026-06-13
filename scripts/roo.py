@@ -394,6 +394,38 @@ def _extract_hostnames(text, target):
     return sorted(names)
 
 
+def _append_hosts_overrides(target, hostnames):
+    """Add newly discovered hostnames to ROO_HOSTS/./hosts when target is an IP."""
+    if not (_IP_RE.match(target) and hostnames):
+        return []
+
+    usable = [h for h in hostnames if not h.startswith("*.")]
+    if not usable:
+        return []
+
+    hosts_path = Path(os.environ.get("ROO_HOSTS", "hosts"))
+    existing = hosts_path.read_text().splitlines() if hosts_path.exists() else []
+    mapped = set()
+    for line in existing:
+        clean = line.split("#", 1)[0].strip()
+        if not clean:
+            continue
+        parts = clean.split()
+        mapped.update(parts[1:])
+
+    added = [h for h in usable if h not in mapped]
+    if not added:
+        return []
+
+    hosts_path.parent.mkdir(parents=True, exist_ok=True)
+    with hosts_path.open("a") as f:
+        if existing and existing[-1].strip():
+            f.write("\n")
+        for h in added:
+            f.write(f"{target} {h}\n")
+    return added
+
+
 def _buckaroo_whatweb(svc, target, port, d):
     """Run whatweb on a web service; write fingerprint.json, return a summary str.
 
@@ -469,6 +501,14 @@ def cmd_buckaroo(args):
         facts += ["", "## NSE script output", "```",
                   "\n".join(nse_lines) if nse_lines else "(no script output)", "```"]
 
+    # Learn redirect/cert hostnames before web enrichment. If the scan target is
+    # an IP, persist those names into ./hosts so WhatWeb can follow redirects
+    # during this same buckaroo instead of recording a resolver failure.
+    hostnames = _extract_hostnames(nmap_txt + "\n" + scripts_txt, target)
+    added_hosts = _append_hosts_overrides(target, hostnames)
+    if added_hosts:
+        ok(f"hosts updated: {', '.join(added_hosts)} → {target}")
+
     # Web service → sharpen past nmap with whatweb (tech/version from headers,
     # cookies, body, meta). Best-effort: a whatweb miss never fails the buckaroo.
     # Writes fingerprint.json (which `roo vulns` mines for app/version CVEs) and
@@ -477,9 +517,8 @@ def cmd_buckaroo(args):
     if web_summary:
         facts += ["", "## Web fingerprint (whatweb)", "```", web_summary, "```"]
 
-    # Surface hostnames the box revealed (redirect target / cert CN+SAN). The
-    # orchestrator adds these to ./hosts and feeds them to vhost/dns enum.
-    hostnames = _extract_hostnames(nmap_txt + "\n" + scripts_txt, target)
+    # Surface hostnames the box revealed (redirect target / cert CN+SAN). These
+    # feed vhost/dns enum and now also prime ./hosts for web enrichment above.
     if hostnames:
         facts += ["", "## Discovered hostnames",
                   *(f"- `{h}`  (map to {target} in ./hosts)" for h in hostnames)]

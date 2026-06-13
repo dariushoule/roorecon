@@ -34,6 +34,9 @@ then follow its workflow and drive its helper scripts.
   operator uses — authenticated enumeration, network/console capture, repro flows.
   CDP is local (127.0.0.1:9222); only page traffic is tunneled. Use for: "open a
   browser", "drive the browser", "poke around the web app", "log in and explore".
+  **Before using this skill, read `docs/MCP.md`.** If browser/Playwright MCP
+  tools are not visible in the current harness, you cannot drive the browser yet;
+  tell the operator to enable the MCP and continue with CLI-based enumeration.
 - **teardown** → `.claude/skills/teardown/SKILL.md`
   Clean end-of-engagement shutdown: close the browser, `roo proxy down`, then
   `roo vpn down` (last), remove Playwright scratch (`.playwright-mcp/`), verify no
@@ -120,4 +123,5 @@ adding a tool, skill, or network capability.
 - `scripts/roo.py` — the cross-platform `roo` CLI (all tooling + automation).
 - `scripts/roo`, `scripts/roo.cmd` — Unix and Windows shims to it.
 - `docker/<tool>/Dockerfile` — one minimal image per CLI.
+- `docs/MCP.md` — MCP setup notes for browser control across harnesses.
 - `recon-results/` — scan output (git-ignored).
