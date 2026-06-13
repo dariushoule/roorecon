@@ -1,7 +1,24 @@
 # MCP setup
 
-RooRecon uses MCP only for companion browser control. Scanning and reporting run
-through `scripts/roo` and do not need MCP.
+RooRecon *integrates* MCP for companion browser control — scanning and reporting
+run through `scripts/roo` and need no MCP. Two further MCP servers are
+**recommended (optional)** because they sharpen the agent's advice rather than
+add a tool: see "Recommended knowledge MCPs" below.
+
+## Recommended knowledge MCPs (optional)
+
+Enumeration and fingerprinting are far more effective when the agent can pull
+current facts instead of relying on training memory. Two add-ons help a lot:
+
+- **[Context7](https://github.com/upstash/context7)** — fetches up-to-date docs
+  for tools/services/frameworks (default creds, version-specific behavior,
+  known-good flags). Keyless.
+- **[Exa](https://github.com/exa-labs/exa-mcp-server)** — live web search for
+  advisories, version quirks, and technique write-ups (needs an Exa API key).
+
+Neither is required; without them the agent falls back to its own knowledge.
+Both are general-purpose MCPs configured in your harness/Codex config (not
+auto-loaded from this repo), the same way as the Playwright server below.
 
 ## What the MCP does
 

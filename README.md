@@ -57,6 +57,13 @@ See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the design (the sidecar is a
 - **Python 3** — runs the `roo` CLI (stdlib only).
 - *Optional, for `roo browser`* — a Chromium-family browser (Chrome/Chromium/
   Edge/Brave) on the host, plus **Node** (`npx`) for the agent's Playwright MCP.
+- *Recommended, for sharper advice* — the
+  **[Context7](https://github.com/upstash/context7)** and
+  **[Exa](https://github.com/exa-labs/exa-mcp-server)** MCP servers. Context7
+  pulls current tool/service docs and Exa does live web search, which materially
+  improves the agent's enumeration and fingerprinting guidance (version quirks,
+  default creds, known-good flags, technique write-ups). See
+  [docs/MCP.md](docs/MCP.md).
 
 ## VPN targets
 
