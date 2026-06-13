@@ -139,6 +139,11 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   browser the operator uses. Great for authenticated enumeration after the
   operator logs in. The browser is the one host (non-container) tool; its CDP
   channel is local (`127.0.0.1:9222`), only its page traffic is tunneled.
+- **teardown** (`.claude/skills/teardown/SKILL.md`) — clean end-of-engagement
+  shutdown. Closes the browser, drops the proxy then the VPN tunnel (last), tidies
+  Playwright MCP scratch (`.playwright-mcp/`) out of the tree, and verifies no
+  `roorecon-*` containers remain — while preserving loot (`recon-results/`) and the
+  saved browser profile. Triggers on "clean up", "shut down", "tear down", "wrap up".
 
 ## Ground rules
 

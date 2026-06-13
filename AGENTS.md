@@ -34,6 +34,12 @@ then follow its workflow and drive its helper scripts.
   operator uses — authenticated enumeration, network/console capture, repro flows.
   CDP is local (127.0.0.1:9222); only page traffic is tunneled. Use for: "open a
   browser", "drive the browser", "poke around the web app", "log in and explore".
+- **teardown** → `.claude/skills/teardown/SKILL.md`
+  Clean end-of-engagement shutdown: close the browser, `roo proxy down`, then
+  `roo vpn down` (last), remove Playwright scratch (`.playwright-mcp/`), verify no
+  `roorecon-*` containers remain — preserving loot (`recon-results/`) and the saved
+  browser profile. Don't auto-commit; solo commits only when asked. Use for: "clean
+  up", "shut down", "tear down", "wrap up", "stop everything", "we're done".
 
 ## Containerized tooling (convention)
 
