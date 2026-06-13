@@ -11,9 +11,15 @@ then follow its workflow and drive its helper scripts.
 - **recon** → `.claude/skills/recon/SKILL.md`
   Network/service/web enumeration. Fast path: `scripts/roo sweep` streams open
   ports while per-port `scripts/roo buckaroo` deep-dives each; simple path:
-  `scripts/roo recon`. Produces a prioritized attack list.
+  `scripts/roo recon`. Findings stream to the CLI as found; `scripts/roo report`
+  assembles the final document. Produces a prioritized attack list.
   Use for: "recon", "enumerate", "scan", "what's open on this box", "where do
   I start on this target".
+- **dirbust** → `.claude/skills/dirbust/SKILL.md`
+  Recursive web content discovery: `scripts/roo dirbust <url>` drives gobuster
+  breadth-first over discovered directories (SecLists baked in), streaming hits.
+  Use for: "dirbust", "directory brute", "content discovery", "find hidden
+  paths/files", "fuzz endpoints".
 
 ## Containerized tooling (convention)
 
@@ -28,7 +34,9 @@ scripts/roo sweep <target>                # streaming parallel TCP+UDP discovery
 scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discovery
 scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
 scripts/roo dns <domain>                  # DNS subdomain enum, external domain
+scripts/roo dirbust <url>                 # recursive directory/file brute (SecLists)
 scripts/roo recon <target>                # simple one-shot phased scan
+scripts/roo report <target>               # assemble per-port facts+notes into report.md
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
 scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp)
 scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
@@ -36,8 +44,9 @@ scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
 ```
 
-It builds `docker/<tool>/Dockerfile` on demand and mounts the cwd at `/work`.
-VPN-only target? Join the sidecar's netns:
+It builds `docker/<tool>/Dockerfile` on demand and mounts the cwd at `/work`;
+images are tagged by Dockerfile hash, so an edited Dockerfile rebuilds on the
+next run. VPN-only target? Join the sidecar's netns:
 `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
 
 **Architecture:** the VPN sidecar is a *location* (owns the tunnel namespace);

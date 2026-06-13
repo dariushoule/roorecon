@@ -20,6 +20,9 @@ mounts the cwd at `/work`.
 scripts/roo run nmap -sCV -p- 10.10.10.5   # runs nmap in roorecon/nmap
 ```
 
+A changed Dockerfile rebuilds automatically on the next run (the tag is its
+hash), so a `git pull` is picked up with no extra step.
+
 ## Quick start
 
 Drop your engagement `.ovpn` in `./vpn/` (if the target needs one), then:
@@ -31,8 +34,10 @@ claude "Run recon on 10.0.24.44"
 ## Commands
 
 Recon: `sweep` (streaming TCP+UDP discovery) → `buckaroo` (per-port deep-dive,
-surfaces hostnames) → `vhost`/`dns` (name enumeration). Post-foothold, the VPN
-sidecar doubles as your box on the engagement network:
+surfaces hostnames) → `vhost`/`dns` (name enum) and `dirbust` (recursive web
+content discovery); `report` collates it all into `report.md`. Findings stream to
+the CLI as they're found. Post-foothold, the VPN sidecar doubles as your box on
+the engagement network:
 
 | Command | Use |
 |---------|-----|

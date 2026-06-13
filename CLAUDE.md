@@ -24,7 +24,9 @@ scripts/roo sweep <target>                # streaming parallel TCP+UDP discovery
 scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discovery
 scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
 scripts/roo dns <domain>                  # DNS subdomain enum, external domain
+scripts/roo dirbust <url>                 # recursive directory/file brute (SecLists)
 scripts/roo recon <target>                # simple one-shot phased scan
+scripts/roo report <target>               # assemble per-port facts+notes into report.md
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
 scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp/curl)
 scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
@@ -32,12 +34,29 @@ scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
 ```
 
-Name-enum wordlists are baked into the gobuster image (SecLists); default is a
-fast list, override with `--wordlist <name|host-path>` or `$ROO_WORDLIST`.
+SecLists wordlists are baked into the gobuster image (DNS/subdomain for
+`vhost`/`dns`, Web-Content for `dirbust`); each verb defaults to a fast list,
+override with `--wordlist <name|host-path>` or `$ROO_WORDLIST`.
 
 `roo` builds `docker/<tool>/Dockerfile` on demand (tagged by Dockerfile hash)
-and runs it with the cwd mounted at `/work`. For VPN-only targets, join the VPN
+and runs it with the cwd mounted at `/work` — editing a Dockerfile changes its
+hash, so the next run rebuilds automatically. For VPN-only targets, join the VPN
 sidecar's network: `ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
+
+**Which box has which tool (don't guess).** `roo run <tool>` works *only* for
+tools with a `docker/<tool>/Dockerfile` (`nmap`, `gobuster`) — `roo run curl …`
+fails, there's no such image. Ad-hoc clients (curl, wget, nc, socat, dig,
+impacket) live in `net-toolbox`; reach them at the tunnel IP with
+**`scripts/roo shell <cmd>`** (e.g. `scripts/roo shell curl -s http://target/`).
+Rule of thumb: a scanner with its own image → `roo run`; anything else you'd run
+on a jump box → `roo shell`. For web content discovery use
+**`scripts/roo dirbust <url>`**, not raw `gobuster dir` — it manages recursion
+and wordlists.
+
+**Windows/Git-Bash gotcha:** an arg that looks like a Unix path (`/wordlists/x`,
+`/usr/share/...`) gets MSYS-mangled into `C:/Program Files/Git/...` before it
+reaches the container. Prefix the command with `MSYS_NO_PATHCONV=1` when passing
+absolute container paths.
 
 **Architecture (read `ARCHITECTURE.md` before adding tools/skills).** The VPN
 sidecar is a *location* — it owns the tunnel namespace and nothing else (no tools
@@ -50,48 +69,36 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
 
 ## Networking & VPN (agent guidance — important)
 
-- **Recognize internal/VPN-only targets.** Any RFC1918 address (`10.0.0.0/8`,
-  `172.16.0.0/12`, `192.168.0.0/16`), CGNAT (`100.64.0.0/10`), or a VPN-based
-  platform (HackTheBox, TryHackMe) is reachable only through a tunnel.
-- **Hostnames need explicit resolution — don't assume external.** When the
-  target is a name rather than an IP, resolve it first and decide the network
-  path from what it resolves to; if it's an internal range, apply the VPN flow.
-  Lab/CTF names (`*.htb`, `*.thm`, `*.box`, `.local`, internal corp domains)
-  usually do **not** resolve via public DNS — they need an entry in `./hosts`
-  (or DNS pushed by the VPN), and that entry needs the box's IP. If you can't
-  resolve a name and don't have its IP, **ask the user for the IP/mapping**
-  rather than scanning blind. Note resolution context differs by mode: a tool
-  container resolves via its own DNS + the mounted `./hosts`, and over the VPN it
-  uses the tunnel's DNS — not the host's resolver.
-- **Require a tunnel before scanning such a target.** Check
-  `scripts/roo vpn status`. If it's down, start it with `scripts/roo vpn up`,
-  then route tools through it:
-  `ROO_NET=container:roorecon-vpn scripts/roo sweep <target>`.
-- **If no OpenVPN config is present, ask for one.** `scripts/roo vpn up` looks
-  for a `.ovpn` in `./vpn/`. If there is none, STOP and ask the user to drop
-  their `.ovpn` into `./vpn/` (it's git-ignored) — never attempt to scan a
-  VPN-only target without it.
-- **Run exactly one tunnel per `.ovpn` — don't fight the sidecar.** Platforms
-  like HTB/THM allow only a single connection per config. If the user also has a
-  host VPN client (system OpenVPN, the HTB app, Tunnelblick, etc.) connected with
-  the **same** `.ovpn`, it and the sidecar contend for that one slot — the server
-  flaps between them and scans go flaky (ports show `filtered`/closed
-  intermittently, results don't reproduce). If you see that symptom, suspect
-  contention first, not the box. The fix: pick one tunnel. For this containerized
-  flow, prefer the sidecar — have the user disconnect the host client, then
-  `scripts/roo vpn up`. (The host client's tunnel usually doesn't route into the
-  Docker VM anyway, which is why the sidecar exists.)
-- **Note internal IPs.** Record every private/internal IP you encounter — the
-  target itself and any internal hosts surfaced in scan output — as pivot
-  candidates in your engagement notes.
-- **Host overrides go in `./hosts`, not the host's `/etc/hosts`.** The host's
-  `/etc/hosts` is invisible to containers. When a box needs a name (e.g.
-  `10.10.10.5 box.htb`), add the line to `./hosts`; `roo` mounts it into every
-  tool container automatically (works direct or over VPN).
-- **Follow hostnames the box reveals.** A buckaroo on a web port reports
-  redirect/cert hostnames (in `facts.md` and `hostnames.txt`). Add each to
-  `./hosts`, then enumerate more: `roo vhost <ip> <domain>` for an internal IP,
-  `roo dns <domain>` for an external one. Feed new names back into `./hosts` and
+- **Recognize internal/VPN-only targets.** Any RFC1918 (`10/8`, `172.16/12`,
+  `192.168/16`), CGNAT (`100.64/10`), or VPN platform (HackTheBox, TryHackMe) is
+  reachable only through a tunnel.
+- **Resolve hostnames before assuming external.** Resolve a name first and pick
+  the path from what it resolves to. Lab/CTF names (`*.htb`, `*.thm`, `*.box`,
+  `.local`, internal corp domains) usually don't resolve via public DNS — they
+  need a `./hosts` entry (which needs the box's IP) or DNS pushed by the VPN. Can't
+  resolve and don't have the IP? **Ask the user** — don't scan blind. (Resolution
+  differs by mode: a tool container uses its own DNS + mounted `./hosts`; over the
+  VPN it uses the tunnel's DNS — never the host resolver.)
+- **Require a tunnel first.** Check `scripts/roo vpn status`; if down,
+  `scripts/roo vpn up`, then prefix tools with
+  `ROO_NET=container:roorecon-vpn`.
+- **No `.ovpn` present → STOP and ask.** `roo vpn up` needs a `.ovpn` in `./vpn/`
+  (git-ignored). Never scan a VPN-only target without one.
+- **One tunnel per `.ovpn`.** HTB/THM allow a single connection per config; a host
+  VPN client on the *same* `.ovpn` contends with the sidecar and makes scans flaky
+  (ports flip `filtered`/closed, nothing reproduces). On that symptom, suspect
+  contention before the box — disconnect the host client and prefer the sidecar.
+  (A host client's tunnel usually can't route into the Docker VM anyway — the
+  reason the sidecar exists.)
+- **Note internal IPs.** Record every private IP you see — the target and any
+  internal hosts in scan output — as pivot candidates.
+- **Host overrides go in `./hosts`, not the host's `/etc/hosts`** (invisible to
+  containers). Add lines like `10.10.10.5 box.htb`; `roo` mounts them into every
+  tool container (direct or over VPN).
+- **Follow hostnames the box reveals.** Buckaroos report redirect/cert hostnames
+  (`facts.md`, `hostnames.txt`). Add each to `./hosts`, then enumerate more:
+  `roo vhost <ip> <domain>` (internal) or `roo dns <domain>` (external) for names,
+  `roo dirbust <url>` for paths. Feed new names back into `./hosts` and
   re-buckaroo — recon is a loop, not a line.
 
 ## Available skills
@@ -99,7 +106,11 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
 - **recon** (`.claude/skills/recon/SKILL.md`) — network/service/web enumeration.
   Fast path: `scripts/roo sweep` streams open ports while per-port
   `scripts/roo buckaroo` deep-dives each one; simple path: `scripts/roo recon`.
-  Produces a prioritized "attack this first" list.
+  Findings stream to the CLI as found; `scripts/roo report` assembles the final
+  document. Produces a prioritized "attack this first" list.
+- **dirbust** (`.claude/skills/dirbust/SKILL.md`) — recursive web content
+  discovery. `scripts/roo dirbust <url>` drives gobuster breadth-first over
+  discovered directories (SecLists baked in), streaming each hit live.
 
 ## Ground rules
 

@@ -12,15 +12,18 @@ Subcommands:
   buckaroo <target> <proto> <port>  per-port enum -> facts.md (+ hostname discovery)
   vhost <ip> <domain>             vhost (Host-header) enum for an internal IP
   dns <domain>                    DNS subdomain enum for an external domain
+  dirbust <url>                   recursive directory/file brute (SecLists)
   recon <target>                  simple one-shot phased scan
+  report <target>                 assemble per-port facts + notes into report.md
   vpn <up|down|status> [config]   manage the OpenVPN sidecar
   proxy <up|down|status>          SOCKS5 egress for host tools (browser/Burp/curl)
   shell [cmd...]                  interactive operator shell in the tunnel namespace
   ip                              print the tunnel IP (your LHOST)
   fwd <port> [--stop]             bridge a tunnel port to a host listener
 
-Wordlists (vhost/dns) are baked into the gobuster image from SecLists; select
-with --wordlist <name|path> or $ROO_WORDLIST (default: subdomains-top1million-5000).
+Wordlists are baked into the gobuster image from SecLists; select with
+--wordlist <name|path> or $ROO_WORDLIST. Defaults: vhost/dns ->
+subdomains-top1million-5000, dirbust -> common.txt (recursion-friendly).
 
 Environment:
   ROO_NET=<spec>    docker --network for tools (e.g. container:roorecon-vpn)
@@ -382,6 +385,7 @@ def cmd_buckaroo(args):
 
     svc_line = next((ln for ln in nmap_txt.splitlines()
                      if re.match(rf"^{port}/{proto}\s", ln)), "(no open service line)")
+    ok(f"fingerprint {proto}/{port}: {svc_line.strip()}")  # surface live, before the report
     facts = [f"# {proto}/{port} on {target}", "", f"- service: `{svc}`", "",
              "## Service/version scan", "```", svc_line, "```"]
     if scripts_txt.strip():
@@ -414,14 +418,14 @@ VHOST_HIT_RE = re.compile(r"(\S+)\s+Status:")
 DNS_HIT_RE = re.compile(r"^([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)\b")
 
 
-def _resolve_wordlist(w):
+def _resolve_wordlist(w, default=DEFAULT_WORDLIST):
     """Return (container_path, extra_mounts) for a wordlist selector.
 
     Selector may be a baked name (e.g. combined_subdomains.txt) or an absolute
     /wordlists path -> used as-is; or a host file path -> mounted into the image.
-    Falls back to $ROO_WORDLIST, then the fast default.
+    Falls back to $ROO_WORDLIST, then the caller's default.
     """
-    w = w or os.environ.get("ROO_WORDLIST") or DEFAULT_WORDLIST
+    w = w or os.environ.get("ROO_WORDLIST") or default
     p = Path(w)
     if p.is_file():  # a host path -> mount it in
         return "/wordlists/_custom", _bind(p, "/wordlists/_custom", readonly=True)
@@ -482,6 +486,102 @@ def cmd_dns(args):
     ok(f"dns enum done — {len(found)} name(s) in {outdir / 'subdomains.txt'}")
 
 
+# --- subcommand: dirbust (recursive content discovery via gobuster) ---------
+# gobuster has no native recursion, so roo drives it: BFS over discovered
+# directories, re-running `gobuster dir` per level. common.txt is the default
+# because recursion multiplies requests — a big list per level explodes fast;
+# pass --wordlist DirBuster-2007_directory-list-2.3-big.txt for a thorough run.
+DIR_DEFAULT_WORDLIST = "/wordlists/common.txt"
+# gobuster dir prints the wordlist entry (no leading slash), e.g.
+# "login                (Status: 200) [Size: 6160]"; a real directory adds a
+# trailing-slash redirect "[--> http://h/login/]". Capture entry + status.
+DIR_HIT_RE = re.compile(r"^(\S+)\s+\(Status:\s*(\d+)\)")
+# Recursing into static-asset trees burns requests for nothing — record the hit
+# but don't descend. Extend per-run with --skip (this baseline always applies).
+NOISE_DIRS = {"css", "js", "javascript", "images", "img", "icons", "fonts",
+              "assets", "static", "media", "styles", "vendor", "dist", "build",
+              "node_modules", "bower_components"}
+
+
+def _host_from_url(url):
+    m = re.match(r"https?://([^/:]+)", url)
+    return m.group(1) if m else url.replace("/", "_")
+
+
+def _looks_like_dir(path, status, line):
+    """Recurse into a hit only if it looks like a directory.
+
+    Most reliable signal: the server redirected to the same path *with a
+    trailing slash* (nginx/apache auto-append for real dirs). Absent a redirect,
+    treat an extensionless 2xx/403 as a directory candidate. Plain redirects to
+    elsewhere (e.g. an auth gate, /dashboard -> /login) are not dirs.
+    """
+    redir = re.search(r"\[-->\s*(.+?)\]", line)
+    if redir:
+        return redir.group(1).strip().endswith("/")
+    if status.startswith("2") or status == "403":
+        return "." not in path.rstrip("/").rsplit("/", 1)[-1]
+    return False
+
+
+def cmd_dirbust(args):
+    """Recursive directory/file brute-forcing via gobuster (SecLists)."""
+    require_docker()
+    ref = ensure_image("gobuster")
+    wl, mounts = _resolve_wordlist(args.wordlist, default=DIR_DEFAULT_WORDLIST)
+    host = _host_from_url(args.url)
+    outdir = _rel_out(args.out) / host
+    outdir.mkdir(parents=True, exist_ok=True)
+    findings = outdir / "dirbust.txt"
+    logpath = outdir / "dirbust.log"
+
+    # Don't recurse into asset/noise dirs (default set + --skip extras).
+    skip = NOISE_DIRS | {s.strip().lower() for s in (args.skip or "").split(",") if s.strip()}
+    base = args.url.rstrip("/")
+    queue = [(base, 0)]       # (url, depth)
+    visited = set()
+    hits = []
+    info(f"dirbust on {base} — wordlist {wl}, depth {args.depth}, cap {args.max_dirs} dirs")
+    with findings.open("w") as ff, logpath.open("w") as lf:
+        while queue:
+            url, depth = queue.pop(0)
+            if url in visited:
+                continue
+            if len(visited) >= args.max_dirs:
+                info(f"reached --max-dirs {args.max_dirs}; {len(queue)+1} queued "
+                     f"dir(s) not scanned (raise --max-dirs to go deeper)")
+                break
+            visited.add(url)
+            gob = ["dir", "-u", url, "-w", wl, "-t", str(args.threads),
+                   "--no-progress", "-q", "-k"]
+            if args.ext:
+                gob += ["-x", args.ext]
+            lf.write(f"\n=== {url} (depth {depth}) ===\n")
+            lf.flush()
+            info(f"scanning {url}  (depth {depth})")
+            proc = _docker_run("gobuster", ref, gob, stream=True, extra_mounts=mounts)
+            for line in proc.stdout:
+                lf.write(line)
+                lf.flush()
+                m = DIR_HIT_RE.match(line.strip())
+                if not m:
+                    continue
+                path, status = m.group(1).lstrip("/"), m.group(2)
+                full = f"{url}/{path}"
+                ff.write(f"{status}\t{full}\n")
+                ff.flush()
+                hits.append((status, full))
+                ok(f"dirbust: {status}  {full}")     # surface live, don't wait for the end
+                seg = path.rstrip("/").rsplit("/", 1)[-1].lower()
+                if (depth + 1 <= args.depth and seg not in skip
+                        and _looks_like_dir(path, status, line)):
+                    nxt = full.rstrip("/")
+                    if nxt not in visited and all(nxt != q for q, _ in queue):
+                        queue.append((nxt, depth + 1))
+            proc.wait()
+    ok(f"dirbust done — {len(hits)} path(s) across {len(visited)} dir(s) in {findings}")
+
+
 # --- subcommand: recon (simple phased scan) ---------------------------------
 def cmd_recon(args):
     require_docker()
@@ -517,6 +617,82 @@ def cmd_recon(args):
     (outdir / "summary.txt").write_text(summary)
     ok(f"done. results in {outdir}/")
     print("\n" + summary)
+
+
+# --- subcommand: report (assemble per-port artifacts into one markdown) -----
+# A report is the *final* aggregation, not the delivery path for time-sensitive
+# findings — sweep/buckaroo/dirbust already stream those live to the CLI. This
+# just collates what's on disk so the operator (and agent) have one document.
+# The layout lives in an editable template (templates/report.md) — roo only
+# fills {{TOKENS}} — because it's a high-traffic manual tweak. Override the
+# template path with --template or $ROO_REPORT_TEMPLATE.
+_SVC_LINE_RE = re.compile(r"^(\d+)/(tcp|udp)\s+open\s+(\S+)\s*(.*)$")
+REPORT_TEMPLATE = Path(os.environ.get("ROO_REPORT_TEMPLATE",
+                                      REPO_ROOT / "templates" / "report.md"))
+
+
+def _port_sort_key(name):
+    # "tcp-80" -> ("tcp", 80) so ports sort numerically within a protocol.
+    proto, _, port = name.partition("-")
+    return (proto, int(port) if port.isdigit() else 0)
+
+
+def _read(p):
+    return p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
+
+
+def cmd_report(args):
+    """Assemble per-port facts + notes into a single markdown report."""
+    target = args.target
+    outdir = _rel_out(args.out) / target
+    if not outdir.is_dir():
+        die(f"no results at {outdir}/ — run a sweep/buckaroo first")
+    template = Path(args.template) if args.template else REPORT_TEMPLATE
+    if not template.is_file():
+        die(f"report template not found: {template}")
+    ports_dir = outdir / "ports"
+    port_dirs = sorted([p for p in ports_dir.iterdir() if p.is_dir()],
+                       key=lambda p: _port_sort_key(p.name)) if ports_dir.is_dir() else []
+
+    # Open-port fingerprint rows, pulled from each port's facts.md service line.
+    rows, details = [], []
+    for pd in port_dirs:
+        facts = _read(pd / "facts.md")
+        notes = _read(pd / "notes.md")
+        svc = next((m for m in (_SVC_LINE_RE.match(ln.strip())
+                                 for ln in facts.splitlines()) if m), None)
+        if svc:
+            num, proto, name, ver = svc.groups()
+            rows.append(f"| {num} | {proto} | {name} | {ver.strip() or '—'} |")
+        else:
+            rows.append(f"| {pd.name} | | (no facts yet) | — |")
+        block = [f"### {pd.name.replace('-', '/')}", ""]
+        block.append(facts.strip() or "_no facts.md — run a buckaroo on this port._")
+        if notes.strip():
+            block += ["", "#### Operator notes", "", notes.strip()]
+        details.append("\n".join(block))
+
+    hostnames = [h for h in _read(outdir / "hostnames.txt").split() if h]
+    tokens = {
+        "TARGET": target,
+        "SWEEP_STATUS": "complete" if (outdir / "sweep.done").is_file()
+                        else "in progress / not run",
+        "PORT_COUNT": str(len(port_dirs)),
+        "FINGERPRINT_ROWS": "\n".join(rows or ["| — | | none found | — |"]),
+        "HOSTNAMES": ("\n".join(f"- `{h}`  → add `{target} {h}` to ./hosts" for h in hostnames)
+                      if hostnames
+                      else "_none discovered. Buckaroo a web port to harvest redirect/cert names._"),
+        "PER_PORT_DETAIL": "\n\n".join(details) if details else "_no ports enumerated yet._",
+    }
+    md = template.read_text(encoding="utf-8")
+    # Strip a leading HTML comment block — it's editor-only help (the token list)
+    # and shouldn't render into the report. The in-body TODO comment survives.
+    md = re.sub(r"\A\s*<!--.*?-->\s*", "", md, count=1, flags=re.DOTALL)
+    for k, v in tokens.items():
+        md = md.replace("{{" + k + "}}", v)
+    report = outdir / "report.md"
+    report.write_text(md, encoding="utf-8")
+    ok(f"report written — {report}  ({len(port_dirs)} port(s), template {template.name})")
 
 
 # --- subcommand: vpn --------------------------------------------------------
@@ -818,6 +994,26 @@ def build_parser():
     pdns.add_argument("--wordlist", help="baked name, /wordlists path, or host file")
     pdns.add_argument("--out", default="recon-results")
     pdns.set_defaults(func=cmd_dns)
+
+    pdb = sub.add_parser("dirbust", help="recursive directory/file brute (SecLists)")
+    pdb.add_argument("url", help="base URL, e.g. http://box.htb/ or http://box.htb/app/")
+    pdb.add_argument("--wordlist", help="baked name (default common.txt), /wordlists path, or host file")
+    pdb.add_argument("--depth", type=int, default=2, help="recursion depth (0 = no recursion; default 2)")
+    pdb.add_argument("--ext", help="comma-separated extensions to also try, e.g. php,txt,html")
+    pdb.add_argument("--threads", type=int, default=40, help="gobuster threads per level")
+    pdb.add_argument("--max-dirs", type=int, default=60, dest="max_dirs",
+                     help="hard cap on directories scanned (recursion guard)")
+    pdb.add_argument("--skip", help="extra dir names to not recurse into (comma-separated; "
+                                    "added to the built-in asset/noise list)")
+    pdb.add_argument("--out", default="recon-results")
+    pdb.set_defaults(func=cmd_dirbust)
+
+    prep = sub.add_parser("report", help="assemble per-port facts + notes into report.md")
+    prep.add_argument("target")
+    prep.add_argument("--out", default="recon-results")
+    prep.add_argument("--template", help="report template path (default templates/report.md "
+                                         "or $ROO_REPORT_TEMPLATE)")
+    prep.set_defaults(func=cmd_report)
 
     pv = sub.add_parser("vpn", help="manage the OpenVPN sidecar")
     pv.add_argument("action", choices=["up", "down", "status"])

@@ -16,9 +16,10 @@ hosts
 # Local Claude Code settings (per-user; keep settings.json shared)
 .claude/settings.local.json
 
-# OS / editor cruft
+# OS / editor / swamp cruft
 .DS_Store
 *.swp
+nul
 
 # Python
 __pycache__/

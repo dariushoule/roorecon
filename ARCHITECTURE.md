@@ -41,8 +41,8 @@ that must vary independently:
   shell. You must be able to update or run a scanner *without* restarting the
   tunnel. Separate images make tools come and go while the location persists.
 - **Rebuild blast radius.** Images are tagged by a hash of their Dockerfile, so
-  any edit rebuilds that image. Separation means editing a wordlist rebuilds
-  `gobuster`, not the tunnel and not the toolbox.
+  any edit rebuilds that image (and only that image) on next use — editing a
+  wordlist rebuilds `gobuster`, not the tunnel and not the toolbox.
 - **Conceptual clarity for skills.** A skill says "run tool X in the engagement
   namespace." The author never reasons about Docker networking — the namespace
   is a given, tools plug into it.
@@ -54,7 +54,7 @@ that must vary independently:
 | `openvpn` | **location** — owns the tunnel + namespace | minimal: `openvpn` + `iproute2`. No tools. |
 | `net-toolbox` | **operator tools** | `ncat`, `socat`, `python3`, `impacket`, `microsocks`, `tmux`. One image, three run-modes (`shell`/`proxy`/`fwd`). |
 | `nmap` | **recon scanner** | `NET_RAW` for SYN/UDP/OS scans. Kept apart from operator tools: different privilege, different phase. |
-| `gobuster` | **recon scanner** | vhost/DNS enumeration; SecLists baked in. |
+| `gobuster` | **recon scanner** | vhost/DNS name enum + recursive content discovery (`dirbust`); SecLists baked in. |
 
 `net-toolbox` is deliberately *one* image used three ways rather than three
 near-identical images — microsocks-as-egress, socat-as-forwarder, and the

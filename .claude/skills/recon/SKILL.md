@@ -34,7 +34,16 @@ this skill does not cross.
 3. **Triage and go deeper as results land** — the fast path does this per port
    via buckaroos; the simple path after both phases finish.
 4. **Summarize.** Give the user a ranked "attack these first" list with the
-   evidence (port, service, version, why it's interesting).
+   evidence (port, service, version, why it's interesting). Generate the report
+   artifact with `scripts/roo report <target>` → `recon-results/<target>/report.md`
+   (open-ports/fingerprint table, hostnames, per-port facts + your notes).
+
+**Surface findings as they land — don't gate on the report.** Every `roo` verb
+streams high-value findings to the CLI the instant it has them: `sweep` prints
+each open port, `buckaroo` prints the service fingerprint and discovered
+hostnames, `dirbust` prints each path. Relay those to the user as they appear.
+`roo report` is the *end-of-run aggregation*, not the delivery path for
+time-sensitive results.
 
 ## Fast path — streaming sweep + buckaroos (default for CTF)
 
@@ -107,20 +116,24 @@ redirects to `box.htb` → add to hosts → find `admin.box.htb`" loop.
 
 ## Tooling runs in containers
 
-Every CLI runs in its own minimal Docker image via the cross-platform `roo` CLI
-(`scripts/roo` on Unix, `scripts\roo.cmd` from PowerShell), so scans behave the
-same on Linux/macOS/Windows. The `sweep`, `buckaroo`, and `recon` subcommands
-all drive containers for you. Requirements: Docker running
-(Engine/Desktop/OrbStack) and Python 3. For a VPN-only target prefix with
-`ROO_NET=container:roorecon-vpn`.
+Every CLI runs in a minimal Docker image via `roo` (`scripts/roo` on Unix,
+`scripts\roo.cmd` on PowerShell), identical across Linux/macOS/Windows. Needs
+Docker running and Python 3; a tool's first use builds its image. Prefix
+VPN-only targets with `ROO_NET=container:roorecon-vpn`.
+
+**Need an ad-hoc client (curl, wget, nc, dig)?** No `roo run` image exists for
+those — run them at the tunnel IP with `scripts/roo shell <cmd>`. `roo run` is
+only for tools with a dedicated image (nmap, gobuster); see CLAUDE.md "Which box
+has which tool."
 
 ## Interpreting output
 
 - Read `recon-results/<target>/summary.txt` first for the digest, then the
   full `services.nmap` for script output and banners.
 - Map each open service to a follow-up. Examples:
-  - HTTP/HTTPS → `gobuster`/`ffuf` dir + vhost enum; check `robots.txt`,
-    source, headers, default creds.
+  - HTTP/HTTPS → recursive content discovery (`scripts/roo dirbust <url>`, see
+    the **dirbust** skill) + vhost enum; check `robots.txt`, source, headers,
+    default creds.
   - SMB (139/445) → `smbclient -L`, `enum4linux-ng`, null/guest sessions.
   - FTP (21) → anonymous login, writable dirs.
   - SSH (22) → version → known CVEs; note for credential reuse later.
@@ -129,10 +142,9 @@ all drive containers for you. Requirements: Docker running
 
 ## Notes for the operator
 
-- This is enumeration, not exploitation. It produces a map and a plan; the
-  actual attacking happens in follow-up steps the user approves.
-- Scans can be slow on full `-p-`; tell the user it's running and roughly how
-  long. Don't silently block. The first run of a tool also builds its image.
-- Tools run only in containers — there is no host fallback. If Docker isn't
-  running, or the tool's image fails to build, surface that error; don't try to
-  run a host binary.
+- Enumeration, not exploitation — produces a map and a plan; the operator
+  approves the attacking steps.
+- Full `-p-` is slow; say it's running and roughly how long rather than blocking
+  silently. A tool's first run also builds its image.
+- Container-only, no host fallback. If Docker is down or an image fails to build,
+  surface the error — don't run a host binary.
