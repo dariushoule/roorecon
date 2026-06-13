@@ -15,6 +15,11 @@ tidies scratch, without throwing away results or the operator's work.
   fingerprints) or `.roo/browser-profile` (the operator's saved login) unless the
   operator explicitly asks for a deep clean. They're git-ignored, so they don't dirty
   the tree — leaving them costs nothing and saves a re-auth / re-scan next time.
+- **Leave the BloodHound stack up.** `roo bloodhound` is a *local* analysis platform
+  (not on the engagement network) holding the operator's graph — treat it like loot,
+  not engagement infra. Tearing down the tunnel does not require stopping it, so
+  leave it running by default; stop it only on request (`roo bloodhound down`, or
+  `--wipe` to drop the data) or in a deep clean.
 - **Don't auto-commit code.** Make the tree *clean to report*, but commit source
   changes only when the operator asks. Commits are solo-authored — no co-author /
   generated-by trailer.
@@ -39,7 +44,10 @@ tidies scratch, without throwing away results or the operator's work.
 4. **Drop the VPN tunnel (last):** `scripts/roo vpn down` — now off the engagement
    network.
 5. **Verify nothing is left:**
-   - `docker ps --filter name=roorecon --format '{{.Names}} ({{.Status}})'` → empty.
+   - `docker ps --filter name=roorecon --format '{{.Names}}' | grep -v roorecon-bloodhound`
+     → empty (the engagement containers — vpn/proxy/fwd/scanners — are down). The
+     `roorecon-bloodhound-*` analysis stack is *expected* to remain unless asked to
+     stop; don't flag it as leftover.
    - `git status --short` → clean (or only intentional, operator-approved changes).
 
 ## Report back
@@ -47,10 +55,11 @@ tidies scratch, without throwing away results or the operator's work.
 Tell the operator, plainly, what's down and what was kept:
 
 - Browser closed; SOCKS proxy stopped; VPN tunnel down (off the engagement network);
-  no `roorecon-*` containers running.
+  no engagement `roorecon-*` containers running.
 - Working tree clean.
-- **Preserved:** `recon-results/` (loot) and `.roo/browser-profile` (saved login) on
-  disk, git-ignored.
+- **Preserved:** `recon-results/` (loot), `.roo/browser-profile` (saved login), and
+  the BloodHound CE stack if it was up (the graph) — note it's still on
+  `127.0.0.1:8080` and how to stop it (`roo bloodhound down`).
 
 If the operator asked to commit pending changes, do so (solo author, concise message)
 and report the hash. If there are uncommitted source changes you did *not* commit,
@@ -58,6 +67,8 @@ list them so nothing is silently dropped.
 
 ## Optional deep clean (only if asked)
 
+- Stop + wipe the BloodHound CE stack (graph DB included): `scripts/roo bloodhound
+  down --wipe`.
 - Remove the saved browser session / generated artifacts: `rm -rf .roo/` (forces
   re-auth and regenerates proxychains/hosts next run).
 - Remove engagement results: `rm -rf recon-results/<target>/` — **destructive, confirm

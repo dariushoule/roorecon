@@ -153,12 +153,20 @@ has which tool."
 - Read `recon-results/<target>/summary.txt` first for the digest, then the
   full `services.nmap` for script output and banners.
 - Map each open service to a follow-up. Examples:
+  - **Domain Controller** (Kerberos 88 + LDAP 389 + SMB 445 together — usually
+    Windows, often with 135/139/636/3268/5985) → this is an AD engagement:
+    **switch to the `ad` skill** (`.claude/skills/ad/SKILL.md`). It owns the
+    credentialed sweep (`nxc`/`bloodyAD`), the privesc triage (BadSuccessor / ADCS /
+    delegation / ACLs), and the graph (`bhcollect` → `roo bloodhound`). Add the DC's
+    domain + hostname to `./hosts` first — `scripts/roo shell nxc smb <ip>` reveals
+    them.
   - HTTP/HTTPS → recursive content discovery (`scripts/roo dirbust <url>`, see
     the **dirbust** skill) + vhost enum; buckaroo already whatweb-fingerprints the
     port, but re-run `scripts/roo fingerprint http://<hostname>/` on a discovered
     vhost to fingerprint the real app; check `robots.txt`, source, headers,
     default creds.
-  - SMB (139/445) → `smbclient -L`, `enum4linux-ng`, null/guest sessions.
+  - SMB (139/445) → `scripts/roo shell nxc smb <t> [-u U -p P] --shares --users`,
+    null/guest sessions. On a DC, use the **ad** skill.
   - FTP (21) → anonymous login, writable dirs.
   - SSH (22) → note version for the CVE lookup and for credential reuse later.
   - DB ports (3306/5432/1433/27017/6379) → default creds, unauth access.

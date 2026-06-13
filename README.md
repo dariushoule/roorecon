@@ -44,12 +44,26 @@ on the engagement network:
 | `scripts/roo fingerprint <url>` | web tech/version detection (whatweb) — sharper than nmap |
 | `scripts/roo browser [url]` | host browser, VPN-proxied + agent-drivable over CDP (Playwright MCP) |
 | `scripts/roo proxy up` | SOCKS5 egress — host browser/Burp/curl reach the target through the tunnel |
-| `scripts/roo shell` | operator shell at the tunnel IP — reverse shells, payload hosting, impacket |
+| `scripts/roo shell` | operator shell at the tunnel IP — reverse shells, hosting, and the AD kit (`nxc`, `bloodyAD`, `certipy`, `evil-winrm`, impacket, `bhcollect`) |
+| `scripts/roo bloodhound view <zip>` | local BloodHound CE — ingest a collection and view the attack graph in the browser |
 | `scripts/roo fwd <port>` | bridge a tunnel port to a host listener |
 | `scripts/roo ip` | print the tunnel IP (your LHOST) |
 
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the design (the sidecar is a
 *location*; everything else is a *tool* that runs in its namespace).
+
+## Active Directory
+
+When recon finds a Domain Controller (Kerberos + LDAP + SMB), the agent switches
+to the **ad** skill — a credentialed AD runbook driving `nxc`, `bloodyAD`,
+`certipy`, and impacket from `roo shell`: domain ID → shares/users/roast → ADCS,
+delegation, ACL and **BadSuccessor** (Server 2025 dMSA) triage → DCSync. It's
+built to work on *hardened* DCs: tools that **seal** LDAP (so signing-enforced /
+LDAPS-resetting DCs don't block you), `clocksync <dc>` to beat Kerberos clock
+skew without touching the host clock, and `bhcollect <dc> <user> <pass>` —
+one command that collects a BloodHound graph via rusthound-ce's Kerberos path
+where the usual Python collectors can't. View it with
+`scripts/roo bloodhound view <zip>` (the **bloodhound** skill).
 
 ## Requirements
 
@@ -128,6 +142,14 @@ work:
   [gobuster](https://github.com/OJ/gobuster),
   [WhatWeb](https://github.com/urbanadventurer/WhatWeb),
   [OpenVPN](https://openvpn.net), each in its own minimal container.
+- **Active Directory** — [NetExec](https://github.com/Pennyw0rth/NetExec),
+  [Impacket](https://github.com/fortra/impacket) (Fortra),
+  [bloodyAD](https://github.com/CravateRouge/bloodyAD),
+  [Certipy](https://github.com/ly4k/Certipy),
+  [evil-winrm](https://github.com/Hackplayers/evil-winrm) /
+  [evil-winrm-py](https://github.com/adityatelange/evil-winrm-py), and
+  [RustHound-CE](https://github.com/g0h4n/RustHound-CE) feeding
+  [BloodHound CE](https://github.com/SpecterOps/BloodHound) (SpecterOps).
 - **Browser control** — [Playwright MCP](https://github.com/microsoft/playwright-mcp)
   (Microsoft) drives the host browser over CDP for `roo browser`.
 - **Vulnerability & exploit data** (keyless) — [NVD](https://nvd.nist.gov) (NIST),
