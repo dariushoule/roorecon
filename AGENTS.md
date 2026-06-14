@@ -64,10 +64,12 @@ then follow its workflow and drive its helper scripts.
 - **wintools** → `.claude/skills/wintools/SKILL.md`
   Fetch prebuilt Windows offensive tooling (GhostPack/Rubeus, SharpHound, Certify,
   the *Potato suite, …) from the Forge registry into a **shared, off-host `/tools`
-  Docker volume**: `scripts/roo tools list|get|installed|rm`. Binaries land in the
-  Docker VM (not a host path EDR scans) and show at `/tools` in every `roo shell`
-  to stage onto a target; downloads egress the public internet, never the VPN. Use
-  for: "grab a windows tool", "download Rubeus/SharpHound", "I need <SharpX>".
+  Docker volume**: `scripts/roo tools list|builds|get|installed|rm`. Binaries land
+  in the Docker VM (not a host path EDR scans) and show at `/tools` in every `roo
+  shell` to stage onto a target; downloads egress the public internet, never the
+  VPN. `get` prefers the **fresh main/branch build** over stale release tags
+  (Rubeus-style; override `--release`/`--ref`). Use for: "grab a windows tool",
+  "download Rubeus/SharpHound", "I need <SharpX>".
 - **teardown** → `.claude/skills/teardown/SKILL.md`
   Clean end-of-engagement shutdown: close the browser, `roo proxy down`, then
   `roo vpn down` (last), remove Playwright scratch (`.playwright-mcp/`), verify no
@@ -103,7 +105,7 @@ scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
 scripts/roo hashcat [args...]             # GPU password cracking on the HOST (auto-installs)
 scripts/roo wordlist [name]               # fetch a SecLists password list (default rockyou)
-scripts/roo tools <list|get|installed|rm> [name]  # prebuilt Windows tools → shared off-host /tools volume
+scripts/roo tools <list|builds|get|installed|rm> [name]  # prebuilt Windows tools → off-host /tools (prefers main builds)
 ```
 
 It builds `docker/<tool>/Dockerfile` on demand and mounts the cwd at `/work`;

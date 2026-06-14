@@ -23,7 +23,7 @@ Subcommands:
   fwd <port> [--stop]             bridge a tunnel port to a host listener
   hashcat [args...]               host hashcat for GPU cracking (auto-installs)
   wordlist [name]                 fetch a SecLists password list (default rockyou)
-  tools <list|get|installed|rm> [name]  prebuilt Windows tools → shared off-host /tools volume
+  tools <list|builds|get|installed|rm> [name]  prebuilt Windows tools → off-host /tools (prefers main builds)
 
 Wordlists are baked into the gobuster image from SecLists; select with
 --wordlist <name|path> or $ROO_WORDLIST. Defaults: vhost/dns ->
@@ -1455,59 +1455,119 @@ def _forge_releases():
         die(f"could not reach Forge ({url}): {e}")
 
 
-def _forge_latest_by_tool(rels):
-    """Collapse releases to the newest one per tool name (tag = tool/<name>/<hash>)."""
-    latest = {}
+def _forge_group(rels):
+    """Group releases by tool name (tag = tool/<name>/<commit>)."""
+    g = {}
     for rel in rels:
         parts = rel.get("tag", "").split("/")
         if len(parts) >= 3 and parts[0] == "tool":
-            nm = parts[1]
-            if nm not in latest or rel.get("published_at", "") > latest[nm].get("published_at", ""):
-                latest[nm] = rel
-    return latest
+            g.setdefault(parts[1], []).append(rel)
+    return g
+
+
+def _forge_commit(rel):
+    return rel.get("tag", "").split("/")[-1]
+
+
+def _forge_label(rel):
+    # name is "<tool> - <version-or-commit>"; take the part after the last " - ".
+    return rel.get("name", "").rsplit(" - ", 1)[-1].strip()
+
+
+def _forge_is_main(rel):
+    """True if this build came off the default branch (no upstream release tag).
+
+    Forge labels a build by its resolved version/tag; with no tag it falls back to
+    the commit hash — so label == the tag's commit ⇒ a branch/main build. We prefer
+    those: tools like Rubeus tag releases years apart, so the tagged build is stale
+    (e.g. no BetterSuccessor) while the main build tracks current capability.
+    """
+    lbl = _forge_label(rel).lower()
+    return bool(lbl) and lbl == _forge_commit(rel).lower()
+
+
+def _forge_desc(rel):
+    return f"main @{_forge_commit(rel)}" if _forge_is_main(rel) else f"release {_forge_label(rel)}"
+
+
+def _forge_select(builds, ref=None, release=False):
+    """Pick one build: an explicit ref, else newest main build, else newest tagged.
+
+    Default prefers a main/branch build; --release forces the newest tagged build;
+    --ref pins by commit-prefix or version label.
+    """
+    if ref:
+        rl = ref.lower()
+        return next((b for b in builds
+                     if rl == _forge_label(b).lower()
+                     or _forge_commit(b).lower().startswith(rl)), None)
+    mains = [b for b in builds if _forge_is_main(b)]
+    tags = [b for b in builds if not _forge_is_main(b)]
+    pool = (tags or builds) if release else (mains or builds)
+    return max(pool, key=lambda b: b.get("published_at", ""), default=None)
 
 
 def cmd_tools(args):
     """Fetch prebuilt Windows tools from Forge into the shared, off-host /tools volume."""
     require_docker()
     action = args.action
-    if action == "list":
-        latest = _forge_latest_by_tool(_forge_releases())
-        flt = (args.name or "").lower()
-        info(f"Forge packages ({FORGE_BASE}) — `roo tools get <name>`:")
-        for nm in sorted(latest):
-            if flt and flt not in nm.lower():
-                continue
-            print(f"  {nm:24s} {latest[nm].get('name', '')}")
+    if action in ("list", "builds"):
+        groups = _forge_group(_forge_releases())
+        if action == "list":
+            flt = (args.name or "").lower()
+            info(f"Forge packages ({FORGE_BASE}) — `roo tools get <name>` pulls ★ (the default):")
+            for nm in sorted(groups):
+                if flt and flt not in nm.lower():
+                    continue
+                sel = _forge_select(groups[nm])
+                extra = f"  (+{len(groups[nm]) - 1} more — `roo tools builds {nm}`)" if len(groups[nm]) > 1 else ""
+                print(f"  {nm:24s} ★ {_forge_desc(sel)}{extra}")
+            return
+        if not args.name:
+            die("usage: roo tools builds <name>")
+        key = next((k for k in groups if k.lower() == args.name.lower()), None)
+        if key is None:
+            die(f"no Forge package named '{args.name}' — try `roo tools list {args.name}`")
+        default = _forge_select(groups[key])
+        info(f"{key} builds (newest first) — ★ = default; pin with `roo tools get {key} --ref <commit|version>`:")
+        for b in sorted(groups[key], key=lambda x: x.get("published_at", ""), reverse=True):
+            star = "★" if b is default else " "
+            kind = "main" if _forge_is_main(b) else "rel "
+            print(f"  {star} [{kind}] {_forge_label(b):16s} commit {_forge_commit(b)}  {b.get('published_at', '')}")
         return
-    ref = ensure_image("net-toolbox")
+    img = ensure_image("net-toolbox")
     if action == "installed":
-        subprocess.run(["docker", "run", "--rm"] + _tools_mount() + [ref,
+        subprocess.run(["docker", "run", "--rm"] + _tools_mount() + [img,
                         "sh", "-c", "ls -la /tools 2>/dev/null || echo '(nothing installed yet)'"])
         return
     if action == "rm":
         if not args.name:
             die("usage: roo tools rm <name>")
-        subprocess.run(["docker", "run", "--rm"] + _tools_mount() + [ref,
+        subprocess.run(["docker", "run", "--rm"] + _tools_mount() + [img,
                         "sh", "-c", f"rm -rf /tools/{shlex.quote(args.name.lower())}"])
         ok(f"removed /tools/{args.name.lower()}")
         return
     # get
     if not args.name:
         die("usage: roo tools get <name>   (see `roo tools list`)")
-    latest = _forge_latest_by_tool(_forge_releases())
-    key = next((k for k in latest if k.lower() == args.name.lower()), None)
+    groups = _forge_group(_forge_releases())
+    key = next((k for k in groups if k.lower() == args.name.lower()), None)
     if key is None:
         die(f"no Forge package named '{args.name}' — try `roo tools list {args.name}`")
-    rel = latest[key]
-    tag = rel["tag"]
+    builds = groups[key]
+    rel = _forge_select(builds, ref=args.ref, release=args.release)
+    if rel is None:
+        die(f"no build of {key} matches --ref '{args.ref}' — see `roo tools builds {key}`")
     bundle = next((a["name"] for a in rel.get("assets", []) if a["name"].endswith("_bundle.zip")), None)
     if not bundle:
-        die(f"'{key}' has no _bundle.zip asset (tag {tag})")
+        die(f"'{key}' build {_forge_desc(rel)} has no _bundle.zip asset")
     url = (f"{FORGE_BASE}/api/releases/asset"
-           f"?tag={urllib.parse.quote(tag, safe='')}&name={urllib.parse.quote(bundle, safe='')}")
+           f"?tag={urllib.parse.quote(rel['tag'], safe='')}&name={urllib.parse.quote(bundle, safe='')}")
     dest = f"/tools/{key.lower()}"
-    info(f"fetching {rel.get('name', key)}  ({bundle}) → {dest}")
+    info(f"selected {key}: {_forge_desc(rel)}  (built {rel.get('published_at', '?')}) → {dest}")
+    if not args.ref and len(builds) > 1:
+        force = "the newest tagged release with --release" if _forge_is_main(rel) else "a main build with --ref <commit>"
+        info(f"  {len(builds) - 1} other build(s) — `roo tools builds {key}` (force {force})")
     info("egress: public internet (NOT the VPN); unpacks inside the container → the Docker volume, not your host")
     script = (
         f"set -e; rm -rf {dest}; mkdir -p {dest}; "
@@ -1515,10 +1575,10 @@ def cmd_tools(args):
         f"unzip -o /tmp/forge.zip -d {dest} >/dev/null; rm -f /tmp/forge.zip; "
         f"echo '--- contents ---'; ls -R {dest} | head -40"
     )
-    r = subprocess.run(["docker", "run", "--rm"] + _tools_mount() + [ref, "sh", "-c", script])
+    r = subprocess.run(["docker", "run", "--rm"] + _tools_mount() + [img, "sh", "-c", script])
     if r.returncode != 0:
         die("download/unpack failed")
-    ok(f"{key} ready at {dest} — shared across every `roo shell`, lives in the Docker volume (not on the host)")
+    ok(f"{key} ({_forge_desc(rel)}) ready at {dest} — shared across every `roo shell`, in the Docker volume (not on the host)")
 
 
 def cmd_shell(args):
@@ -1954,9 +2014,12 @@ def build_parser():
 
     pt = sub.add_parser("tools",
                         help="fetch prebuilt Windows tools (Forge) into the shared off-host /tools volume")
-    pt.add_argument("action", choices=["list", "get", "installed", "rm"],
-                    help="list | get <name> | installed | rm <name>")
-    pt.add_argument("name", nargs="?", help="tool name (for get/rm) or a filter (for list)")
+    pt.add_argument("action", choices=["list", "builds", "get", "installed", "rm"],
+                    help="list | builds <name> | get <name> | installed | rm <name>")
+    pt.add_argument("name", nargs="?", help="tool name (get/builds/rm) or a filter (list)")
+    pt.add_argument("--ref", help="get: pin a specific build by commit-prefix or version label")
+    pt.add_argument("--release", action="store_true",
+                    help="get: take the newest tagged release instead of the default main/branch build")
     pt.set_defaults(func=cmd_tools)
     return p
 

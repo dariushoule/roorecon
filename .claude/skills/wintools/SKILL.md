@@ -33,23 +33,54 @@ internet, never the VPN** (Forge is a public registry, like CVE lookups).
 ## Commands
 
 ```bash
-scripts/roo tools list [filter]     # what Forge offers (filter by substring)
-scripts/roo tools get <name>        # download + unpack latest <name> → /tools/<name>/
+scripts/roo tools list [filter]     # what Forge offers (★ marks the default build)
+scripts/roo tools builds <name>     # every build of one tool (main vs release, commits, dates)
+scripts/roo tools get <name>        # download + unpack the DEFAULT build → /tools/<name>/
+scripts/roo tools get <name> --release      # force the newest tagged release instead
+scripts/roo tools get <name> --ref <commit|version>   # pin an exact build
 scripts/roo tools installed         # what's in the volume now
 scripts/roo tools rm <name>         # remove /tools/<name> from the volume
 ```
 
-`list`/`get` don't need the VPN. Names map to upstream repos — `rubeus`,
+`list`/`builds`/`get` don't need the VPN. Names map to upstream repos — `rubeus`,
 `sharphound`, `certify`, `seatbelt`, `sharpup`, `sharpdpapi`, `inveigh`,
 `sweetpotato`, `godpotato`, `whisker`, `sharpsuccessor`, `snaffler`, … — run
 `roo tools list` for the live set.
 
+## Build selection — prefer **main** over stale release tags
+
+Many of these tools tag releases *rarely* — Rubeus' last tagged release predates
+BetterSuccessor by years — so the newest *tagged* build is often far behind what
+the tool can actually do. Forge usually carries **both** a build off the upstream
+release tag *and* one off the default branch (`main`). RooRecon's default is to
+pull the **main/branch build**, because that tracks current capability:
+
+```
+$ roo tools builds rubeus
+  ★ [main] 74215f68ea70     commit 74215f68ea70   ← default `get` pulls this
+    [rel ] 1.6.4            commit e93119a37160   ← the years-old tagged release
+```
+
+How it's detected (no guesswork): Forge labels a build by its resolved version;
+with no tag it falls back to the commit hash, so **label == commit ⇒ a main
+build**. `get` prefers the newest main build, falling back to the newest tagged
+build only when there's no main build at all. Override when you have a reason:
+
+- `roo tools get <name> --release` — you specifically want the pinned stable tag.
+- `roo tools get <name> --ref <commit|version>` — reproduce an exact build.
+
+So if a tool "doesn't have the feature you expected" (the edge case that bites:
+an old tagged Rubeus with no BetterSuccessor), check `roo tools builds <name>` —
+you almost certainly want the ★ main build, which is already the default.
+
 ## Workflow
 
-1. **Find it.** `scripts/roo tools list rubeus` → confirm the package + version.
-2. **Fetch it.** `scripts/roo tools get rubeus` → unpacks to `/tools/rubeus/`
-   (a bundle may contain several .NET-version builds; pick the one the target's
-   runtime supports). Idempotent — re-`get` to refresh.
+1. **Find it.** `scripts/roo tools list rubeus` (★ = what `get` pulls). Unsure
+   which build? `scripts/roo tools builds rubeus` shows main vs release + dates.
+2. **Fetch it.** `scripts/roo tools get rubeus` → pulls the **main** build to
+   `/tools/rubeus/` (a bundle may contain several .NET-version builds; pick the one
+   the target's runtime supports). Idempotent — re-`get` to refresh. Need the
+   pinned release instead? `--release`; an exact commit? `--ref <commit>`.
 3. **Use it from a `roo shell`.** The volume is mounted at `/tools`, so the binary
    is right there:
    ```bash

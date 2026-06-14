@@ -176,10 +176,11 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
 - **wintools** (`.claude/skills/wintools/SKILL.md`) — fetch prebuilt Windows
   offensive tooling (GhostPack/Rubeus, SharpHound, Certify, the *Potato suite, …)
   from the Forge registry into a **shared, off-host `/tools` Docker volume**:
-  `scripts/roo tools list|get|installed|rm`. Binaries land in the Docker VM (not a
-  host path your EDR scans) and are visible at `/tools` in every `roo shell` to
-  stage onto a target. Downloads egress the public internet, never the VPN.
-  Triggers on "grab a windows tool", "download Rubeus/SharpHound".
+  `scripts/roo tools list|builds|get|installed|rm`. Binaries land in the Docker VM
+  (not a host path your EDR scans) and are visible at `/tools` in every `roo shell`
+  to stage onto a target. `get` defaults to the **fresh main/branch build** over
+  stale release tags (Rubeus-style — override with `--release`/`--ref`). Downloads
+  egress the public internet, never the VPN. Triggers on "grab a windows tool".
 - **teardown** (`.claude/skills/teardown/SKILL.md`) — clean end-of-engagement
   shutdown. Closes the browser, drops the proxy then the VPN tunnel (last), tidies
   Playwright MCP scratch (`.playwright-mcp/`) out of the tree, and verifies no
