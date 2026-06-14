@@ -65,7 +65,7 @@ The operator is a person actively using this browser. Be a considerate co-driver
 
 - **Authenticated enumeration:** operator logs in, you map the dashboard, every
   authenticated route, forms, roles, and hidden admin/API endpoints — exactly the
-  foothold path for apps like SmartHire.
+  foothold path for bespoke / login-gated web apps.
 - **Endpoint/parameter discovery:** read `browser_network_requests` to harvest API
   routes, request shapes, tokens, and parameters the HTML doesn't reveal.
 - **Reproducing a flow** the operator describes, then inspecting the requests it

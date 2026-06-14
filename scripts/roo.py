@@ -14,6 +14,7 @@ Subcommands:
   dns <domain>                    DNS subdomain enum for an external domain
   dirbust <url>                   recursive directory/file brute (SecLists)
   recon <target>                  simple one-shot phased scan
+  vol <image> <plugin|creds|strings>  offline memory forensics (volatility3) on a RAM dump
   report <target>                 assemble per-port facts + notes into report.md
   vpn <up|down|status> [config]   manage the OpenVPN sidecar
   proxy <up|down|status>          SOCKS5 egress for host tools (browser/Burp/curl)
@@ -911,6 +912,65 @@ def cmd_vulns(args):
     r = _docker_run("vuln", ref, argv, use_net=False)
     if r.returncode != 0:
         die(f"vuln-research worker exited {r.returncode}")
+
+
+# --- subcommand: vol (offline memory forensics via volatility3) -------------
+# Memory-image analysis is offline loot processing — like hashcat, it never
+# touches the target or the VPN. It runs volatility3 (+ pypykatz, strings) in a
+# container over a *local* dump (.vmem/.dmp/.raw/hiberfil/lsass minidump) mounted
+# from cwd. Symbol tables download from the public internet on first use, so it
+# egresses on the default docker network (use_net=False), never the tunnel.
+VOL_CRED_PLUGINS = ["windows.hashdump.Hashdump",      # local SAM (Administrator NT hash)
+                    "windows.lsadump.Lsadump",        # LSA secrets (service/autologon creds)
+                    "windows.cachedump.Cachedump"]    # cached domain creds (DCC2)
+# Default cleartext-sweep markers: autologon, plaintext creds, roastable blobs.
+VOL_STRINGS_DEFAULT = r"(DefaultPassword|DefaultUserName|password=|passwd=|pass=|" \
+                      r"Administrator:|net user|\$krb5|autologon)"
+
+
+def _rel_under_cwd(p):
+    """A cwd-relative POSIX path for a file mounted into the container (/work).
+
+    Only cwd is mounted, so the memory image must live under it. An absolute path
+    inside cwd is rebased to relative; anything outside is a hard error (it would
+    be invisible in-container). Spaces survive — the path is one argv element.
+    """
+    q = Path(p)
+    if not q.is_file():
+        die(f"memory image not found: {p}")
+    if q.is_absolute():
+        try:
+            q = q.resolve().relative_to(Path.cwd())
+        except ValueError:
+            die(f"memory image must be inside the current directory (mounted as /work); got '{p}'")
+    return _cpath(q)
+
+
+def cmd_vol(args):
+    """Offline memory forensics via volatility3/pypykatz (creds + artifacts from a dump)."""
+    require_docker()
+    ref = ensure_image("volatility")
+    img = _rel_under_cwd(args.image)
+    if args.plugin == "creds":
+        info(f"vol creds — hashdump · lsadump · cachedump on {args.image}")
+        rc = 0
+        for plug in VOL_CRED_PLUGINS:
+            ok(f"== {plug} ==")
+            r = _docker_run("volatility", ref, ["vol", "-f", img, plug], use_net=False)
+            rc = rc or r.returncode
+        info("feed any recovered hash/cred back into the spray/PTH loop (ad skill)")
+        sys.exit(rc)
+    if args.plugin == "strings":
+        pattern = args.args[0] if args.args else VOL_STRINGS_DEFAULT
+        info(f"strings sweep on {args.image} — /{pattern}/i (cleartext/autologon markers)")
+        script = (f"strings -n 6 {shlex.quote(img)} | grep -aiE {shlex.quote(pattern)} "
+                  f"| sort -u | head -300")
+        r = _docker_run("volatility", ref, ["sh", "-c", script], use_net=False)
+        sys.exit(r.returncode)
+    # raw passthrough: any volatility3 plugin + its args (windows.info, pslist, …)
+    r = _docker_run("volatility", ref, ["vol", "-f", img, args.plugin, *(args.args or [])],
+                    use_net=False)
+    sys.exit(r.returncode)
 
 
 # --- subcommand: vpn --------------------------------------------------------
@@ -1942,6 +2002,14 @@ def build_parser():
     pvln.add_argument("--refresh", action="store_true", help="bypass the on-disk cache")
     pvln.add_argument("--out", default="recon-results")
     pvln.set_defaults(func=cmd_vulns)
+
+    pvol = sub.add_parser("vol", help="offline memory forensics via volatility3 (creds/artifacts from a dump)")
+    pvol.add_argument("image", help="path to a memory image under cwd (.vmem/.dmp/.raw/hiberfil/lsass dump)")
+    pvol.add_argument("plugin", help="volatility3 plugin (windows.info, windows.hashdump, …), "
+                                     "or the 'creds' / 'strings' shortcut")
+    pvol.add_argument("args", nargs=argparse.REMAINDER,
+                      help="extra args for the plugin (or a regex for the 'strings' sweep)")
+    pvol.set_defaults(func=cmd_vol)
 
     pfp = sub.add_parser("fingerprint", help="web fingerprint via whatweb (tech + versions)")
     pfp.add_argument("url", help="target URL, e.g. http://box.htb/")

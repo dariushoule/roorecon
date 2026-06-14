@@ -45,6 +45,18 @@ roo wordlist --list          # known aliases (rockyou, darkweb2017-top10000, xat
 
 ## Workflow
 
+### 0. Before you crack: spray, and sanity-check the path
+
+- **Spray every credential you already hold at the target account first.** Reuse is
+  free and instant; cracking is neither. The instant you hold any password, spray it
+  (and re-spray every new one). Never spend GPU time on a hash whose plaintext a free
+  spray would hand you. (See the **ad** skill's "spray before you crack".)
+- **On CTF/HTB, treat rockyou(+`best66`) as the verdict on whether this is the path.**
+  Intended creds almost always fall to rockyou plus a standard rule. If a roast
+  survives that, **suspect you're on the wrong path** (a fallback, not the planted
+  route) rather than escalating to giant wordlists/masks for hours. Step back and
+  re-examine the attack graph before burning the GPU harder.
+
 ### 1. Identify the hash → pick the mode (`-m`)
 
 The mode is everything; the wrong `-m` cracks nothing. There is no `hashid`/

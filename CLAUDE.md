@@ -29,6 +29,7 @@ scripts/roo fingerprint <url>             # web tech/version detection (whatweb)
 scripts/roo vulns <target>                # CVE + public-PoC lookup for fingerprints (keyless)
 scripts/roo recon <target>                # simple one-shot phased scan
 scripts/roo report <target>               # assemble per-port facts+notes into report.md
+scripts/roo vol <image> <plugin|creds|strings>  # offline memory forensics (volatility3) on a RAM dump
 scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
 scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp/curl)
 scripts/roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
@@ -173,6 +174,14 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   type → mode (`-m`) against hashcat's example-hashes wiki, then runs a
   wordlist→rules→mask ladder. The **ad** skill hands roasts (Kerberoast/AS-REP/
   NetNTLMv2) here. Triggers on "help me crack this hash".
+- **memforensics** (`.claude/skills/memforensics/SKILL.md`) — offline memory-image
+  forensics. `scripts/roo vol <image> creds` runs volatility3's credential trifecta
+  (SAM hashdump + LSA secrets + cached domain creds) over a local RAM dump / VM
+  memory snapshot (`.vmem`/`.dmp`/`hiberfil`); `… <plugin>` passes through any
+  volatility3 plugin and `… strings` does a cleartext/flag sweep. Offline + host-
+  side like hashcat (never the target/VPN). The **ad** skill hands a looted memory
+  image here; recovered hashes loop back to its spray/PTH flow. Triggers on
+  ".vmem", "memory dump", "lsass dump", "memory forensics", "extract creds from RAM".
 - **wintools** (`.claude/skills/wintools/SKILL.md`) — fetch prebuilt Windows
   offensive tooling (GhostPack/Rubeus, SharpHound, Certify, the *Potato suite, …)
   from the Forge registry into a **shared, off-host `/tools` Docker volume**:

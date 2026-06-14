@@ -61,13 +61,13 @@ especially for web apps, before looking anything up.
 CPEs the buckaroo now captures):
 
 ```bash
-scripts/roo vulns <target>            # e.g. scripts/roo vulns 10.129.14.1
+scripts/roo vulns <target>            # e.g. scripts/roo vulns 10.10.10.5
 ```
 
 **Ad-hoc** for a single product/version (no recon dir needed):
 
 ```bash
-scripts/roo vulns smarthire --product nginx --version 1.18.0
+scripts/roo vulns box --product nginx --version 1.18.0
 scripts/roo vulns box --cpe cpe:/a:openbsd:openssh:8.9p1
 ```
 
@@ -116,7 +116,7 @@ and follow threads wherever they lead. Some of the many things worth chasing:
   (turns an `uncertain` into a yes/no).
 - **Find/vet PoCs the index missed** — exploit writeups, blog posts, conference demos,
   newer GitHub repos; read the code before trusting it.
-- **Custom / uncommon apps NVD won't have** (e.g. a bespoke "SmartHire" web app) —
+- **Custom / uncommon apps NVD won't have** (e.g. a bespoke in-house web app) —
   search the product name + "vulnerability/exploit/CVE", GitHub for its source,
   default-credential lists, and known-CVE plugins/themes/libraries it ships. The vuln
   is often in *its* code or a dependency, not a CVE database — pair this with source

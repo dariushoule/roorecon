@@ -49,11 +49,12 @@ scripts/roo tools rm <name>         # remove /tools/<name> from the volume
 
 ## Build selection — prefer **main** over stale release tags
 
-Many of these tools tag releases *rarely* — Rubeus' last tagged release predates
-BetterSuccessor by years — so the newest *tagged* build is often far behind what
-the tool can actually do. Forge usually carries **both** a build off the upstream
-release tag *and* one off the default branch (`main`). RooRecon's default is to
-pull the **main/branch build**, because that tracks current capability:
+Many of these tools tag releases *rarely* — Rubeus and other GhostPack tools can
+go a year-plus between tags while shipping new techniques on `main` — so the newest
+*tagged* build is often far behind what the tool can actually do. Forge usually
+carries **both** a build off the upstream release tag *and* one off the default
+branch (`main`). RooRecon's default is to pull the **main/branch build**, because
+that tracks current capability:
 
 ```
 $ roo tools builds rubeus
@@ -69,9 +70,9 @@ build only when there's no main build at all. Override when you have a reason:
 - `roo tools get <name> --release` — you specifically want the pinned stable tag.
 - `roo tools get <name> --ref <commit|version>` — reproduce an exact build.
 
-So if a tool "doesn't have the feature you expected" (the edge case that bites:
-an old tagged Rubeus with no BetterSuccessor), check `roo tools builds <name>` —
-you almost certainly want the ★ main build, which is already the default.
+So when a tool lacks a capability you expected from its current docs/`main`, check
+`roo tools builds <name>` — you almost certainly want the ★ main build, which is
+already the default.
 
 ## Workflow
 

