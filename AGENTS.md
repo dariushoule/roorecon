@@ -54,6 +54,20 @@ then follow its workflow and drive its helper scripts.
   **Before using this skill, read `docs/MCP.md`.** If browser/Playwright MCP
   tools are not visible in the current harness, you cannot drive the browser yet;
   tell the operator to enable the MCP and continue with CLI-based enumeration.
+- **hashcat** → `.claude/skills/hashcat/SKILL.md`
+  Offline hash cracking on the host GPU. `scripts/roo hashcat` runs the real
+  hashcat (auto-installs on first use — a host-tool exception, never
+  target-facing); `scripts/roo wordlist` fetches SecLists password lists (default
+  rockyou). Identify the hash → mode (`-m`) via hashcat's example-hashes wiki, then
+  wordlist→rules→mask. The **ad** skill hands roasts here. Use for: "help me crack
+  this hash", "crack this NTLM/NetNTLMv2/kerberoast hash", "what hashcat mode".
+- **wintools** → `.claude/skills/wintools/SKILL.md`
+  Fetch prebuilt Windows offensive tooling (GhostPack/Rubeus, SharpHound, Certify,
+  the *Potato suite, …) from the Forge registry into a **shared, off-host `/tools`
+  Docker volume**: `scripts/roo tools list|get|installed|rm`. Binaries land in the
+  Docker VM (not a host path EDR scans) and show at `/tools` in every `roo shell`
+  to stage onto a target; downloads egress the public internet, never the VPN. Use
+  for: "grab a windows tool", "download Rubeus/SharpHound", "I need <SharpX>".
 - **teardown** → `.claude/skills/teardown/SKILL.md`
   Clean end-of-engagement shutdown: close the browser, `roo proxy down`, then
   `roo vpn down` (last), remove Playwright scratch (`.playwright-mcp/`), verify no
@@ -84,8 +98,12 @@ scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browse
 scripts/roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
 scripts/roo bloodhound <up|ingest|view|open|down> [zip]   # local BloodHound CE: ingest + view the graph
 scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
+scripts/roo responder [args...]           # LLMNR/NBT-NS/mDNS poisoning + capture (tunnel iface)
 scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
+scripts/roo hashcat [args...]             # GPU password cracking on the HOST (auto-installs)
+scripts/roo wordlist [name]               # fetch a SecLists password list (default rockyou)
+scripts/roo tools <list|get|installed|rm> [name]  # prebuilt Windows tools → shared off-host /tools volume
 ```
 
 It builds `docker/<tool>/Dockerfile` on demand and mounts the cwd at `/work`;
@@ -133,7 +151,10 @@ adding a tool, skill, or network capability.
 - **Enumerate before exploiting.** Produce a map and a plan; let the operator
   approve the actual attacking steps.
 - **Tools run in containers, full stop** — no host fallback. Missing Docker or a
-  failed image build is a hard error, not a silent retry on the host.
+  failed image build is a hard error, not a silent retry on the host. *Two
+  deliberate host-tool exceptions (not fallbacks), per ARCHITECTURE.md:* `browser`
+  (the operator's real browser) and `hashcat` (GPU cracking — host-side, never
+  target-facing).
 
 ## Layout
 

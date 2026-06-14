@@ -18,8 +18,12 @@ Subcommands:
   vpn <up|down|status> [config]   manage the OpenVPN sidecar
   proxy <up|down|status>          SOCKS5 egress for host tools (browser/Burp/curl)
   shell [cmd...]                  interactive operator shell in the tunnel namespace
+  responder [args...]             LLMNR/NBT-NS/mDNS poisoning + capture (tunnel iface)
   ip                              print the tunnel IP (your LHOST)
   fwd <port> [--stop]             bridge a tunnel port to a host listener
+  hashcat [args...]               host hashcat for GPU cracking (auto-installs)
+  wordlist [name]                 fetch a SecLists password list (default rockyou)
+  tools <list|get|installed|rm> [name]  prebuilt Windows tools → shared off-host /tools volume
 
 Wordlists are baked into the gobuster image from SecLists; select with
 --wordlist <name|path> or $ROO_WORDLIST. Defaults: vhost/dns ->
@@ -38,12 +42,15 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -229,6 +236,17 @@ def _home_mount():
     home = Path(".roo") / "home"
     home.mkdir(parents=True, exist_ok=True)
     return _bind(home, "/root")
+
+
+# A *named Docker volume* (not a host bind) for prebuilt Windows tooling: shared
+# across every `roo shell`, persists between runs, but lives inside the Docker VM
+# — never on a host filesystem path, so host EDR doesn't scan it and offensive
+# `.exe`s never trip a false positive. `roo tools` populates it; see cmd_tools.
+TOOLS_VOLUME = "roorecon-tools"
+
+
+def _tools_mount():
+    return ["-v", f"{TOOLS_VOLUME}:/tools"]
 
 
 def _rel_out(out):
@@ -1220,6 +1238,289 @@ def cmd_browser(args):
          "CDP), then ask the agent to drive. See the browse skill.")
 
 
+# --- host tool: hashcat (GPU cracking) --------------------------------------
+# Cracking is the one task that genuinely wants the host GPU, so — like the
+# browser — hashcat runs on the *host*, a deliberate exception to the container
+# rule (containers here are CPU-only and GPU passthrough on Windows is painful,
+# so a host binary is strictly faster). `roo hashcat …` proxies straight to the
+# system hashcat, bootstrapping it on first use: apt on Linux, brew on macOS, the
+# official portable .7z on Windows (cached under .roo/hashcat). Hashes and roasts
+# already live under recon-results on the host, so relative paths pass through.
+HASHCAT_VERSION = "7.1.2"
+HASHCAT_WIN_URL = f"https://hashcat.net/files/hashcat-{HASHCAT_VERSION}.7z"
+
+
+def _hashcat_cache():
+    return Path(".roo") / "hashcat"
+
+
+def _find_hashcat():
+    env = os.environ.get("ROO_HASHCAT")        # explicit override, like $ROO_BROWSER
+    if env:
+        return shutil.which(env) or (str(Path(env).resolve()) if Path(env).is_file() else None)
+    hit = shutil.which("hashcat")
+    if hit:
+        return hit
+    builds = sorted(_hashcat_cache().glob("hashcat-*/hashcat.exe"))  # portable win build
+    return str(builds[-1]) if builds else None
+
+
+def _download(url, dest):
+    # Emit only on a percent *change* (the reporthook fires per 8 KB block, which
+    # is thousands of calls); use \r live-update on a TTY, sparse lines otherwise.
+    tty = sys.stderr.isatty()
+    last = {"pct": -1}
+    def hook(blocks, bs, total):
+        if total <= 0:
+            return
+        pct = min(100, blocks * bs * 100 // total)
+        if pct == last["pct"]:
+            return
+        last["pct"] = pct
+        if tty:
+            sys.stderr.write(f"\r    downloading… {pct:3d}%")
+            sys.stderr.flush()
+        elif pct % 10 == 0:
+            sys.stderr.write(f"    downloading… {pct}%\n")
+    urllib.request.urlretrieve(url, str(dest), hook)
+    if tty:
+        sys.stderr.write("\r" + " " * 24 + "\r")
+        sys.stderr.flush()
+
+
+def _extract_7z(archive, dest):
+    for tool in ("7z", "7za", "7zr"):          # a real 7-Zip if one's installed
+        if shutil.which(tool) and subprocess.run(
+                [tool, "x", "-y", f"-o{dest}", str(archive)],
+                stdout=subprocess.DEVNULL).returncode == 0:
+            return True
+    # Windows 10/11 ship bsdtar as `tar`; libarchive reads the 7zip format.
+    if shutil.which("tar") and subprocess.run(
+            ["tar", "-xf", str(archive), "-C", str(dest)]).returncode == 0:
+        return True
+    return False
+
+
+def _install_hashcat():
+    if sys.platform.startswith("win"):
+        dest = _hashcat_cache()
+        dest.mkdir(parents=True, exist_ok=True)
+        archive = dest / f"hashcat-{HASHCAT_VERSION}.7z"
+        if not archive.is_file():
+            info(f"fetching hashcat {HASHCAT_VERSION} ({HASHCAT_WIN_URL})")
+            try:
+                _download(HASHCAT_WIN_URL, archive)
+            except (urllib.error.URLError, OSError) as e:
+                die(f"download failed: {e}")
+        info("extracting the portable build")
+        if not _extract_7z(archive, dest):
+            die("couldn't extract the .7z — install 7-Zip (https://7-zip.org) or "
+                f"unpack it into {dest} yourself, then re-run.")
+        return _find_hashcat()
+    if sys.platform == "darwin":
+        if not shutil.which("brew"):
+            die("Homebrew not found — install it (https://brew.sh) then re-run, "
+                "or install hashcat by hand.")
+        subprocess.run(["brew", "install", "hashcat"])
+        return _find_hashcat()
+    # linux
+    apt = shutil.which("apt-get") or shutil.which("apt")
+    if not apt:
+        die("no apt found. Install hashcat with your package manager "
+            "(dnf/pacman/zypper) or from https://hashcat.net, then re-run.")
+    cmd = [apt, "install", "-y", "hashcat"]
+    if hasattr(os, "geteuid") and os.geteuid() != 0 and shutil.which("sudo"):
+        cmd = ["sudo"] + cmd
+    subprocess.run(cmd)
+    return _find_hashcat()
+
+
+def cmd_hashcat(args):
+    """Run the host's hashcat for GPU cracking (bootstrap it on first use)."""
+    hc = _find_hashcat()
+    if not hc:
+        info("hashcat not on PATH — bootstrapping for this platform (one-time)")
+        hc = _install_hashcat()
+    if not hc:
+        die("hashcat still not found after the install attempt")
+    info(f"hashcat: {hc}")
+    hc_path = Path(hc)
+    rest = list(args.args or []) or ["--version"]
+    # The portable Windows build resolves ./OpenCL/ (its kernels) relative to the
+    # *cwd*, not the binary — so it must run from its own folder. To keep the
+    # user's relative hash/wordlist paths valid across that cd, absolutize any arg
+    # that exists relative to the original cwd. Args that DON'T exist there are
+    # left alone, so the build's own relative assets still resolve from its dir
+    # (e.g. `-r rules/best64.rule`). A not-yet-existing outfile lands in the
+    # hashcat dir; pass an absolute path or read results back with `--show`.
+    cwd = None
+    if _hashcat_cache().resolve() in hc_path.resolve().parents:
+        cwd = str(hc_path.parent)
+        base = Path.cwd()
+        rest = [str((base / a).resolve())
+                if (not a.startswith("-") and Path(a).exists())
+                else a
+                for a in rest]
+    try:
+        r = subprocess.run([str(hc_path)] + rest, cwd=cwd)
+    except OSError as e:
+        die(f"failed to exec hashcat: {e}")
+    sys.exit(r.returncode)
+
+
+# --- host helper: wordlists (feed the host cracker) -------------------------
+# SecLists password lists, fetched on demand to .roo/wordlists (gitignored) so
+# `roo hashcat` has fuel. rockyou is the default; .tar.gz lists are unpacked with
+# the stdlib tarfile. Accepts a known alias or any SecLists Passwords-relative
+# path (e.g. "Leaked-Databases/rockyou.txt.tar.gz"). The resolved local path is
+# printed to stdout (only that line) so a skill/script can capture it.
+SECLISTS_RAW = os.environ.get(
+    "ROO_SECLISTS_RAW",
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords")
+WORDLISTS = {
+    "rockyou": "Leaked-Databases/rockyou.txt.tar.gz",
+    "darkweb2017-top10000": "darkweb2017-top10000.txt",
+    "xato-1m": "xato-net-10-million-passwords-1000000.txt",
+    "top-1m": "Common-Credentials/10-million-password-list-top-1000000.txt",
+}
+
+
+def _wordlist_cache():
+    return Path(".roo") / "wordlists"
+
+
+def cmd_wordlist(args):
+    """Fetch (and cache) a SecLists password wordlist for the host cracker."""
+    if args.list:
+        info("known aliases (or pass any SecLists Passwords-relative path):")
+        for k, v in WORDLISTS.items():
+            print(f"  {k:22s} {v}")
+        return
+    name = args.name or "rockyou"
+    rel = WORDLISTS.get(name, name)                 # alias → path, else treat as a path
+    fname = rel.split("/")[-1]
+    txt = fname[:-7] if fname.endswith(".tar.gz") else fname   # rockyou.txt.tar.gz → rockyou.txt
+    cache = _wordlist_cache()
+    cache.mkdir(parents=True, exist_ok=True)
+    out = cache / txt
+    if out.is_file() and out.stat().st_size > 0:
+        info(f"wordlist cached: {out.resolve()}  ({out.stat().st_size // (1024*1024)} MB)")
+        print(str(out.resolve()))
+        return
+    url = f"{SECLISTS_RAW}/{rel}"
+    info(f"fetching wordlist '{name}' ({url})")
+    tmp = cache / fname
+    try:
+        _download(url, tmp)
+    except (urllib.error.URLError, OSError) as e:
+        die(f"download failed: {e} — check the name (`roo wordlist --list`) or the path")
+    if fname.endswith(".tar.gz"):
+        info("unpacking .tar.gz")
+        try:
+            with tarfile.open(tmp) as tf:
+                member = next((m for m in tf.getmembers()
+                               if m.isfile() and m.name.endswith(".txt")), None)
+                if member is None:
+                    die("no .txt member inside the archive")
+                with tf.extractfile(member) as src, open(out, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        finally:
+            tmp.unlink(missing_ok=True)
+    else:
+        tmp.replace(out)
+    info(f"wordlist ready: {out.resolve()}  ({out.stat().st_size // (1024*1024)} MB)")
+    print(str(out.resolve()))
+
+
+# --- prebuilt Windows tooling: Forge → the shared /tools volume ---------------
+# Forge (forgenet.pages.dev, ForgeNet21AR/forge) serves prebuilt .NET offensive
+# tools (GhostPack/Rubeus, SharpHound, Certify, …). We list/resolve metadata
+# host-side over the *public internet* (JSON only — never a binary on the host,
+# and never the VPN), then download + unpack the bundle *inside* a container into
+# the `roorecon-tools` volume, so the .exe lands in the Docker VM, not on a host
+# path your EDR scans. Every `roo shell` sees them at /tools.
+FORGE_BASE = os.environ.get("ROO_FORGE_BASE", "https://forgenet.pages.dev")
+
+
+def _forge_releases():
+    url = f"{FORGE_BASE}/api/releases"
+    # Cloudflare 403s the default Python-urllib UA, so present a browser-ish one.
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) roo/1.0",
+        "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r).get("releases", [])
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        die(f"could not reach Forge ({url}): {e}")
+
+
+def _forge_latest_by_tool(rels):
+    """Collapse releases to the newest one per tool name (tag = tool/<name>/<hash>)."""
+    latest = {}
+    for rel in rels:
+        parts = rel.get("tag", "").split("/")
+        if len(parts) >= 3 and parts[0] == "tool":
+            nm = parts[1]
+            if nm not in latest or rel.get("published_at", "") > latest[nm].get("published_at", ""):
+                latest[nm] = rel
+    return latest
+
+
+def cmd_tools(args):
+    """Fetch prebuilt Windows tools from Forge into the shared, off-host /tools volume."""
+    require_docker()
+    action = args.action
+    if action == "list":
+        latest = _forge_latest_by_tool(_forge_releases())
+        flt = (args.name or "").lower()
+        info(f"Forge packages ({FORGE_BASE}) — `roo tools get <name>`:")
+        for nm in sorted(latest):
+            if flt and flt not in nm.lower():
+                continue
+            print(f"  {nm:24s} {latest[nm].get('name', '')}")
+        return
+    ref = ensure_image("net-toolbox")
+    if action == "installed":
+        subprocess.run(["docker", "run", "--rm"] + _tools_mount() + [ref,
+                        "sh", "-c", "ls -la /tools 2>/dev/null || echo '(nothing installed yet)'"])
+        return
+    if action == "rm":
+        if not args.name:
+            die("usage: roo tools rm <name>")
+        subprocess.run(["docker", "run", "--rm"] + _tools_mount() + [ref,
+                        "sh", "-c", f"rm -rf /tools/{shlex.quote(args.name.lower())}"])
+        ok(f"removed /tools/{args.name.lower()}")
+        return
+    # get
+    if not args.name:
+        die("usage: roo tools get <name>   (see `roo tools list`)")
+    latest = _forge_latest_by_tool(_forge_releases())
+    key = next((k for k in latest if k.lower() == args.name.lower()), None)
+    if key is None:
+        die(f"no Forge package named '{args.name}' — try `roo tools list {args.name}`")
+    rel = latest[key]
+    tag = rel["tag"]
+    bundle = next((a["name"] for a in rel.get("assets", []) if a["name"].endswith("_bundle.zip")), None)
+    if not bundle:
+        die(f"'{key}' has no _bundle.zip asset (tag {tag})")
+    url = (f"{FORGE_BASE}/api/releases/asset"
+           f"?tag={urllib.parse.quote(tag, safe='')}&name={urllib.parse.quote(bundle, safe='')}")
+    dest = f"/tools/{key.lower()}"
+    info(f"fetching {rel.get('name', key)}  ({bundle}) → {dest}")
+    info("egress: public internet (NOT the VPN); unpacks inside the container → the Docker volume, not your host")
+    script = (
+        f"set -e; rm -rf {dest}; mkdir -p {dest}; "
+        f"curl -fSL {shlex.quote(url)} -o /tmp/forge.zip; "
+        f"unzip -o /tmp/forge.zip -d {dest} >/dev/null; rm -f /tmp/forge.zip; "
+        f"echo '--- contents ---'; ls -R {dest} | head -40"
+    )
+    r = subprocess.run(["docker", "run", "--rm"] + _tools_mount() + [ref, "sh", "-c", script])
+    if r.returncode != 0:
+        die("download/unpack failed")
+    ok(f"{key} ready at {dest} — shared across every `roo shell`, lives in the Docker volume (not on the host)")
+
+
 def cmd_shell(args):
     """Interactive operator shell in the tunnel namespace (/work mounted)."""
     require_docker()
@@ -1248,7 +1549,41 @@ def cmd_shell(args):
     cmd += (["--network", f"container:{VPN_CONTAINER}",
              "-e", f"LD_PRELOAD={LIBFAKETIME}",
              "-e", "FAKETIME_TIMESTAMP_FILE=/tmp/.roo-faketime"]
-            + _hosts_mount() + _home_mount() + _work_mount() + [ref] + list(cmd_args))
+            + _hosts_mount() + _home_mount() + _work_mount() + _tools_mount()
+            + [ref] + list(cmd_args))
+    r = subprocess.run(cmd)
+    sys.exit(r.returncode)
+
+
+def cmd_responder(args):
+    """Run Responder in the tunnel namespace: LLMNR/NBT-NS/mDNS poisoning + capture.
+
+    A namespace listener like `shell` — it binds the *tunnel* interface (tun0) so
+    it poisons name resolution on the engagement LAN and captures NetNTLMv1/v2 from
+    whoever answers. Captures stream to the console and persist to
+    recon-results/responder/ (mounted over its logs/). Defaults to `-I tun0`; pass
+    any extra Responder flags (e.g. -A to analyze passively, -wF for WPAD).
+    """
+    require_docker()
+    _require_vpn("roo responder")
+    ref = ensure_image("net-toolbox")
+    extra = list(args.args or [])
+    if not any(a in ("-I", "--interface") for a in extra):
+        extra = ["-I", "tun0"] + extra          # default to the tunnel iface
+    loot = Path("recon-results") / "responder"
+    loot.mkdir(parents=True, exist_ok=True)
+    cmd = ["docker", "run", "--rm"]
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        cmd.append("-it")
+    # Raw sockets for the poisoners/analyze, like the scanners get; root in the
+    # container already owns the privileged rogue-server ports (137/445/80/53…).
+    cmd += ["--network", f"container:{VPN_CONTAINER}",
+            "--cap-add=NET_RAW", "--cap-add=NET_ADMIN"]
+    cmd += _bind(loot, "/opt/Responder/logs")
+    cmd += _hosts_mount() + _work_mount() + [ref, "responder"] + extra
+    info(f"Responder in the tunnel namespace — captures stream below, persist to {loot}/")
+    info("poisons LLMNR/NBT-NS/mDNS + rogue SMB/HTTP/…; Ctrl-C to stop")
+    info("captured NetNTLMv1/v2 → crack with the hashcat skill (relay is dead when SMB signing is enforced)")
     r = subprocess.run(cmd)
     sys.exit(r.returncode)
 
@@ -1581,6 +1916,12 @@ def build_parser():
                      help="optional command to run instead of an interactive shell")
     psh.set_defaults(func=cmd_shell)
 
+    prs = sub.add_parser("responder",
+                         help="Responder (LLMNR/NBT-NS/mDNS poisoning + capture) on the tunnel iface")
+    prs.add_argument("args", nargs=argparse.REMAINDER,
+                     help="extra Responder flags (default: -I tun0)")
+    prs.set_defaults(func=cmd_responder)
+
     pip = sub.add_parser("ip", help="print the tunnel IP (your LHOST)")
     pip.set_defaults(func=cmd_ip)
 
@@ -1597,10 +1938,39 @@ def build_parser():
     pbh.add_argument("--wipe", action="store_true",
                      help="down: also delete the neo4j/postgres data volumes")
     pbh.set_defaults(func=cmd_bloodhound)
+
+    phc = sub.add_parser("hashcat",
+                         help="run host hashcat for GPU cracking (auto-installs on first use)")
+    phc.add_argument("args", nargs=argparse.REMAINDER,
+                     help="arguments passed straight to hashcat (e.g. -m 19700 hash rockyou.txt)")
+    phc.set_defaults(func=cmd_hashcat)
+
+    pwl = sub.add_parser("wordlist",
+                         help="fetch a SecLists password wordlist for host hashcat (default rockyou)")
+    pwl.add_argument("name", nargs="?",
+                     help="alias (rockyou, …) or a SecLists Passwords-relative path")
+    pwl.add_argument("--list", action="store_true", help="list known aliases and exit")
+    pwl.set_defaults(func=cmd_wordlist)
+
+    pt = sub.add_parser("tools",
+                        help="fetch prebuilt Windows tools (Forge) into the shared off-host /tools volume")
+    pt.add_argument("action", choices=["list", "get", "installed", "rm"],
+                    help="list | get <name> | installed | rm <name>")
+    pt.add_argument("name", nargs="?", help="tool name (for get/rm) or a filter (for list)")
+    pt.set_defaults(func=cmd_tools)
     return p
 
 
 def main():
+    # hashcat is a verbatim pass-through to the host binary, so capture everything
+    # after the verb ourselves — argparse REMAINDER drops a leading `-flag` (the
+    # common `roo hashcat -m 19700 …` case). The subparser stays registered above
+    # so the verb still shows in `roo --help`.
+    argv = sys.argv[1:]
+    if argv and argv[0] == "hashcat":
+        return cmd_hashcat(argparse.Namespace(args=argv[1:], func=cmd_hashcat))
+    if argv and argv[0] == "responder":
+        return cmd_responder(argparse.Namespace(args=argv[1:], func=cmd_responder))
     args = build_parser().parse_args()
     args.func(args)
 

@@ -1,12 +1,13 @@
 # roorecon/net-toolbox — the operator's tools for the engagement network.
 #
-# One image, three run-modes, all sharing the VPN sidecar's network namespace
+# One image, four run-modes, all sharing the VPN sidecar's network namespace
 # (--network container:roorecon-vpn) so everything acts at the *tunnel IP*:
-#   roo shell  — interactive: reverse-shell catchers, payload hosting, impacket,
-#                AD tooling, pivots. /work is mounted, so loot lands on the host.
-#   roo proxy  — detached microsocks: SOCKS5 egress so host tools (browser/Burp/
-#                curl) reach the target through the tunnel.
-#   roo fwd    — detached socat: bridge a tunnel port back to a host listener.
+#   roo shell     — interactive: reverse-shell catchers, payload hosting, impacket,
+#                   AD tooling, pivots. /work is mounted, so loot lands on the host.
+#   roo proxy     — detached microsocks: SOCKS5 egress so host tools (browser/Burp/
+#                   curl) reach the target through the tunnel.
+#   roo fwd       — detached socat: bridge a tunnel port back to a host listener.
+#   roo responder — Responder on tun0: LLMNR/NBT-NS/mDNS poisoning + NetNTLM capture.
 #
 # This is a *tool* image. It deliberately does NOT own the tunnel — that's the
 # openvpn "location" image's job. See ARCHITECTURE.md (location vs. tools).
@@ -76,7 +77,7 @@ RUN apt-get update \
       krb5-user krb5-pkinit faketime rlwrap \
       ruby ruby-dev \
       build-essential libffi-dev libssl-dev libkrb5-dev \
-      git curl wget iproute2 tmux less vim-tiny ca-certificates \
+      git curl wget iproute2 unzip tmux less vim-tiny ca-certificates \
  && pip3 install --no-cache-dir --break-system-packages impacket \
  && pipx install git+https://github.com/Pennyw0rth/NetExec \
  && pipx install certipy-ad \
@@ -86,6 +87,16 @@ RUN apt-get update \
  && pipx install bloodhound-ce \
  && gem install --no-document evil-winrm \
  && rm -rf /var/lib/apt/lists/*
+
+# Responder (lgandx) — LLMNR/NBT-NS/mDNS poisoner + rogue SMB/HTTP/etc. servers
+# for capturing NetNTLMv1/v2 on the engagement LAN. NOT on PyPI under this name
+# (that's an unrelated web framework), so install from git. The wrapper runs it
+# from its own dir so it finds Responder.conf and writes its logs/ there (the
+# `roo responder` verb binds tun0 in the sidecar namespace and mounts logs/ out).
+RUN git clone --depth 1 https://github.com/lgandx/Responder /opt/Responder \
+ && pip3 install --no-cache-dir --break-system-packages -r /opt/Responder/requirements.txt \
+ && printf '#!/bin/sh\nexec python3 /opt/Responder/Responder.py "$@"\n' > /usr/local/bin/responder \
+ && chmod 0755 /usr/local/bin/responder
 
 # RustHound-CE: built from source (multi-stage, binary copied in above) — the
 # prebuilt release ships WITHOUT GSSAPI, and NTLM can't seal, so only a

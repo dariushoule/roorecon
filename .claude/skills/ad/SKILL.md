@@ -146,6 +146,21 @@ scripts/roo shell sh -c "cd /work && certipy find -u $U@$D -p '$P' -dc-ip $DC -l
 scripts/roo shell bloodhound-ce-python -u $U -p $P -d $D -dc DC01.$D -ns $DC -c All --zip
 ```
 
+- **Spray every credential you hold before you crack anything.** Password reuse
+  is the cheapest lateral move in AD — the same password recurs across accounts,
+  initial passwords get set in bulk, and a service account's password is often its
+  own name or a shared deploy secret. The instant you hold *any* password, spray it
+  across the full userlist (`--users` gives you the list), and spray every password
+  you later crack/dump domain-wide:
+  ```bash
+  nxc smb $DC -u users.txt -p '<known-pass>' --continue-on-success   # one pass, every user
+  nxc smb $DC -u users.txt -p users.txt --no-bruteforce             # username == password
+  ```
+  **Check `--pass-pol` first**: if a lockout threshold is set, spray one password
+  per observation window, not a list (lockout = None ⇒ spray freely). This step
+  comes **before** offline cracking — never spend hashcat time on a hash whose
+  plaintext a free spray would hand you, and the moment a crack/roast yields a
+  password, re-spray it everywhere before anything else.
 - **`--shares`** reports *tested* READ/WRITE per share — trust it over a perms
   string (a `drw-rw-rw-` listing is **not** a write confirmation). Chase WRITE
   shares and any non-default share (backup dumps, dev drops, web roots).
@@ -157,7 +172,9 @@ scripts/roo shell bloodhound-ce-python -u $U -p $P -d $D -dc DC01.$D -ns $DC -c 
   rabbit-hole: get the *specific* ACLs you need with `nxc -M daclread`, and reach
   for `rusthound-ce`/SharpHound for the full graph.
 - **Certipy** — go straight to `-ldap-scheme ldap` (the default LDAPS resets here).
-- Roasting writes hashes to `/work`; crack offline (out of scope — hand to operator).
+- Roasting writes hashes to `/work`; crack them on the host GPU with the **hashcat**
+  skill — `WL=$(scripts/roo wordlist); scripts/roo hashcat -m 19700 kr.txt "$WL"`
+  (spray first — see the rule above — and let the operator approve the crack).
 
 ### 4. Triage → attack paths
 
@@ -178,7 +195,9 @@ scripts/roo shell bloodhound-ce-python -u $U -p $P -d $D -dc DC01.$D -ns $DC -c 
 Common routes a writable/graph edge maps to (a menu, not a priority order — let
 the enumeration pick):
 
-- **Kerberoast / AS-REP** → crack offline → new creds (loop to phase 3).
+- **Kerberoast / AS-REP** → *spray known creds at the target first (reuse is free);
+  only then* crack with the **hashcat** skill (`roo hashcat`) → new creds →
+  re-spray domain-wide (loop to phase 3).
 - **Delegation** — unconstrained / constrained / RBCD (`findDelegation.py`, `rbcd.py`).
 - **AD CS ESC1–16** — `certipy find -ldap-scheme ldap -vulnerable` → `certipy req`/`auth`.
 - **ACL abuse** — `GenericAll`/`WriteDACL`/`ForceChangePassword`/AddSelf/write-membership
@@ -235,6 +254,7 @@ Everything runs in `net-toolbox` at the tunnel IP via `scripts/roo shell …`:
 | Delegation / ACL / RBCD | `findDelegation.py`, `rbcd.py`, `owneredit.py` (impacket-native seal OK) |
 | Secrets / DCSync | `secretsdump.py` |
 | Exec | `psexec.py`, `wmiexec.py`, `smbexec.py`, `nxc -x` |
+| LLMNR/NBT-NS/mDNS poison + NetNTLM capture | `roo responder` (own verb, binds `tun0`; captures → `recon-results/responder/`, crack with the **hashcat** skill — relay is dead when SMB signing is enforced) |
 | Ad-hoc clients | `smbclient`, `ldapsearch`, `dig` |
 
 **Auth selector:** password → NTLM (works now, MD4 fixed). Clock skew →
@@ -273,6 +293,7 @@ seals over 389) plus the krb5/clock setup, then `roo bloodhound view <zip>`. The
 python collectors (`bloodhound-python`, `nxc --bloodhound`) can't seal and fail
 here; that's a tool limit, never "the data is uncollectable".
 
-Loop, don't line: every new credential, hash, or hostname feeds back into the
-sweep. Generate the final map with `scripts/roo report <dc-ip>` once buckaroos +
+Loop, don't line: every new credential — cracked, dumped, *or sprayed* — gets
+sprayed domain-wide and fed back into the sweep; every new hash or hostname feeds
+back too. Generate the final map with `scripts/roo report <dc-ip>` once buckaroos +
 AD findings are on disk.

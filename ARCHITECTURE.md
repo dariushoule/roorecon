@@ -52,7 +52,7 @@ that must vary independently:
 | Image | Role | Notes |
 |-------|------|-------|
 | `openvpn` | **location** — owns the tunnel + namespace | minimal: `openvpn` + `iproute2`. No tools. |
-| `net-toolbox` | **operator tools** | `ncat`/`socat`/`microsocks`, impacket, and the AD kit (`nxc`, `bloodyAD`, `certipy`, `evil-winrm`(+`-py`), BloodHound collectors), `smbclient`/`ldapsearch`/`dig`, `faketime`/`rlwrap`. One image, three run-modes (`shell`/`proxy`/`fwd`). |
+| `net-toolbox` | **operator tools** | `ncat`/`socat`/`microsocks`, impacket, the AD kit (`nxc`, `bloodyAD`, `certipy`, `evil-winrm`(+`-py`), BloodHound collectors), Responder, `smbclient`/`ldapsearch`/`dig`, `unzip`, `faketime`/`rlwrap`. One image, four run-modes (`shell`/`proxy`/`fwd`/`responder`). |
 | `nmap` | **recon scanner** | `NET_RAW` for SYN/UDP/OS scans. Kept apart from operator tools: different privilege, different phase. |
 | `gobuster` | **recon scanner** | vhost/DNS name enum + recursive content discovery (`dirbust`); SecLists baked in. |
 | `bloodhound` (compose) | **local analysis platform** | 3-service CE stack (postgres + neo4j + web). *Not* a per-tool image, *not* in the tunnel — see the exception below. |
@@ -65,10 +65,21 @@ interactive shell are all "operator tools," differing only in how they're run:
   pivots), with `/work` mounted so loot lands on the host.
 - `roo proxy` — detached `microsocks` (SOCKS5 egress for host tools).
 - `roo fwd`   — detached `socat` (bridge a tunnel port to a host listener).
+- `roo responder` — `Responder` on the tunnel iface (`tun0`): LLMNR/NBT-NS/mDNS
+  poisoning + NetNTLM capture, persisting to `recon-results/responder/`. Like
+  `shell`, an inbound listener bound to the engagement LAN — not a SOCKS egress.
 
-### Two deliberate exceptions to "one minimal Dockerfile per tool, in the namespace"
+**Persistent state across `--rm` runs** mounts in two ways, chosen by *whether it
+should surface to the host*: `.roo/home` is a **host bind** for `$HOME`/tool caches
+(visible on disk, git-ignored); the **`roorecon-tools` named volume** at `/tools`
+(`roo tools`) is deliberately *not* a host bind — prebuilt Windows offensive
+binaries live in the Docker VM, shared across every shell but never on a host path
+your EDR scans (no false-positive quarantine). `roo tools` fetches from the public
+internet (Forge), never the target/VPN — like CVE lookups.
 
-Both exist because a capability is fundamentally **not a target-facing tool** and so
+### Three deliberate exceptions to "one minimal Dockerfile per tool, in the namespace"
+
+Each exists because a capability is fundamentally **not a target-facing tool** and so
 doesn't fit the per-image, in-the-tunnel model. Name them so they don't become a
 licence to sprawl:
 
@@ -84,10 +95,19 @@ licence to sprawl:
    and you view it in the browser. The target-facing half (collecting the data from
    the DC) stays a normal namespace tool in `net-toolbox` (`nxc`, the BloodHound
    collectors); only the *visualization* is this exception.
+3. **hashcat** (`roo hashcat`) — **offline** cracking of hashes already on disk,
+   not an action on the target. It wants the **host GPU**, which a container can't
+   reliably reach (GPU passthrough is absent/painful, so a containerized hashcat is
+   CPU-only and strictly slower) — so `roo hashcat` shells out to the real host
+   binary, bootstrapping it on first use (apt / brew / the Windows portable build,
+   cached under `.roo/hashcat`). It never sees the target or the tunnel; `roo
+   wordlist` likewise just fetches SecLists fuel to `.roo/wordlists`. The
+   target-facing half (capturing/roasting the hash) stays a namespace tool in
+   `net-toolbox`; only the *cracking* is this exception.
 
 The rule the exceptions still honour: **target-facing work runs as a tool in the
-tunnel namespace.** A GUI and a local graph DB aren't that, so they're allowed out
-— anything that scans, auths to, or exploits the target is not.
+tunnel namespace.** A GUI, a local graph DB, and an offline GPU cracker aren't that,
+so they're allowed out — anything that scans, auths to, or exploits the target is not.
 
 ## The sidecar is your box on the engagement network
 

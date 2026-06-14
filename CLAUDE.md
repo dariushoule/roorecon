@@ -34,8 +34,11 @@ scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browse
 scripts/roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
 scripts/roo bloodhound <up|ingest|view|open|down> [zip]   # local BloodHound CE: ingest a collection, view the graph
 scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
+scripts/roo responder [args...]           # LLMNR/NBT-NS/mDNS poisoning + capture (tunnel iface)
 scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
+scripts/roo hashcat [args...]             # GPU password cracking on the HOST (auto-installs)
+scripts/roo wordlist [name]               # fetch a SecLists password list (default rockyou)
 ```
 
 SecLists wordlists are baked into the gobuster image (DNS/subdomain for
@@ -60,7 +63,10 @@ smbclient, ldapsearch, impacket) and the AD attack tooling (`nxc`/NetExec,
 `bloodyAD`, `certipy`, `evil-winrm` + `evil-winrm-py`, BloodHound collectors —
 incl. `rusthound-ce` wrapped by the one-command `bhcollect` for hardened DCs —
 plus the `clocksync`/`krbconf`/`faketime`/`rlwrap` helpers) live in
-`net-toolbox`; reach them at the tunnel IP with **`scripts/roo shell <cmd>`**
+`net-toolbox` (which also carries **Responder** — run it on the tunnel iface with
+**`scripts/roo responder`** to poison LLMNR/NBT-NS/mDNS and capture NetNTLM —
+plus `unzip` and the usual archive tools); reach them at the tunnel IP with
+**`scripts/roo shell <cmd>`**
 (e.g. `scripts/roo shell nxc smb <target> -u U -p P --shares`). For a Domain
 Controller, follow the **ad** skill — it sequences these into a runbook and
 carries the auth footgun fixes (MD4, clock skew, LDAP signing).
@@ -160,6 +166,20 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   a SharpHound/rusthound/nxc collection over the REST API, and opens it in the
   browser. Analysis, not attack — collection is the **ad** skill's job; the
   compose stack is a documented architecture exception (see ARCHITECTURE.md).
+- **hashcat** (`.claude/skills/hashcat/SKILL.md`) — offline hash cracking on the
+  host GPU. `scripts/roo hashcat` runs the real hashcat (auto-installs on first
+  use; a host-tool exception, never target-facing) and `scripts/roo wordlist`
+  fetches SecLists password lists (default rockyou). The skill identifies the hash
+  type → mode (`-m`) against hashcat's example-hashes wiki, then runs a
+  wordlist→rules→mask ladder. The **ad** skill hands roasts (Kerberoast/AS-REP/
+  NetNTLMv2) here. Triggers on "help me crack this hash".
+- **wintools** (`.claude/skills/wintools/SKILL.md`) — fetch prebuilt Windows
+  offensive tooling (GhostPack/Rubeus, SharpHound, Certify, the *Potato suite, …)
+  from the Forge registry into a **shared, off-host `/tools` Docker volume**:
+  `scripts/roo tools list|get|installed|rm`. Binaries land in the Docker VM (not a
+  host path your EDR scans) and are visible at `/tools` in every `roo shell` to
+  stage onto a target. Downloads egress the public internet, never the VPN.
+  Triggers on "grab a windows tool", "download Rubeus/SharpHound".
 - **teardown** (`.claude/skills/teardown/SKILL.md`) — clean end-of-engagement
   shutdown. Closes the browser, drops the proxy then the VPN tunnel (last), tidies
   Playwright MCP scratch (`.playwright-mcp/`) out of the tree, and verifies no
@@ -174,7 +194,10 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   approves the actual attacking steps.
 - **Tools run in containers, full stop.** No native-binary fallback — if Docker
   is missing or the tool image fails, that's a hard error, not a silent retry on
-  the host.
+  the host. *Two deliberate exceptions, each a host tool by design (not a
+  fallback) and justified in ARCHITECTURE.md:* **`browser`** (must be the
+  operator's real browser) and **`hashcat`** (cracking wants the host GPU; a CPU
+  container would be strictly slower). Both run on the host, never target-facing.
 
 ## Adding a skill
 
