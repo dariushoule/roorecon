@@ -20,6 +20,8 @@ cat > /etc/krb5.conf <<EOF
     default_realm = $REALM
     dns_lookup_kdc = false
     dns_lookup_realm = false
+    rdns = false
+    dns_canonicalize_hostname = false
 [realms]
     $REALM = {
         kdc = $DC

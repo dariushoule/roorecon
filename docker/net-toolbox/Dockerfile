@@ -72,7 +72,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ncat netcat-traditional socat \
       python3 python3-pip python3-dev pipx \
-      smbclient ldap-utils dnsutils iputils-ping \
+      smbclient ldap-utils libsasl2-modules-gssapi-mit dnsutils iputils-ping \
       krb5-user krb5-pkinit faketime rlwrap \
       ruby ruby-dev \
       build-essential libffi-dev libssl-dev libkrb5-dev \
@@ -118,6 +118,15 @@ RUN printf '%s\n' \
 #   bhcollect — one-command BloodHound CE collection via rusthound-ce's Kerberos
 #               seal (works on hardened DCs); ties krbconf+clocksync+getTGT+rusthound.
 COPY --chmod=0755 clocksync krbconf bhcollect /usr/local/bin/
+
+# Sealed LDAP over plain 389: the OpenLDAP clients (ldapsearch/ldapmodify/ldapadd)
+# do SASL GSSAPI sign+seal (confidentiality) — the one channel that lets you read
+# managed passwords and set/create passwords on a DC that requires confidentiality
+# but resets LDAPS (where ldap3-based tools can't). `SASL_NOCANON on` makes SASL
+# use the literal `-H` host as the SPN (no reverse-DNS canonicalisation, which on a
+# lab `./hosts` picks the domain name and breaks the ticket). Pair with `krbconf`
+# (sets rdns=false) + a TGT in KRB5CCNAME, then `ldapsearch -Y GSSAPI -H ldap://<dc-fqdn>`.
+RUN mkdir -p /etc/ldap && printf 'SASL_NOCANON on\n' > /etc/ldap/ldap.conf
 
 WORKDIR /work
 # No ENTRYPOINT: `roo shell` runs bash, `roo proxy` runs microsocks, `roo fwd`

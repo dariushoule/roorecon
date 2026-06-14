@@ -36,11 +36,15 @@ the fixes; you mostly need to *pick the right auth*.
   so this emulates it without touching the host clock.)
 - **`strongerAuthRequired` on LDAP/389 + LDAPS/636 `Connection reset`** — a DC
   that enforces LDAP signing *and* resets LDAPS defeats **every ldap3-based tool,
-  regardless of auth**. ldap3 can't sign/seal an NTLM bind (→ strongerAuthRequired)
-  and its SASL/GSSAPI bind doesn't negotiate a security layer either (→ *also*
-  strongerAuthRequired, even with a valid Kerberos ticket); over LDAPS it just
-  resets. Confirmed dead on such DCs: `certipy` (default), `dacledit`,
-  `badsuccessor.py`, **and `bloodhound-python`/`bloodhound-ce-python`**.
+  regardless of auth** (the bundled `ldap3 2.9.1` has no sealing support at all).
+  Confirmed dead on such DCs: `certipy` (default), `dacledit`, `badsuccessor.py`,
+  `bloodhound-python`/`bloodhound-ce-python`. Use a tool that seals (next two items).
+- **Confidentiality-required ops** (read `msDS-ManagedPassword`, set/reset/create a
+  password) need a *sealed* (encrypted) bind, not just signed — and LDAPS is dead
+  here. The escape hatch is the **OpenLDAP clients over SASL GSSAPI**, which do
+  sign+**seal** (SSF 256) over plain 389: `ldapsearch`/`ldapmodify`/`ldapadd
+  -Y GSSAPI -H ldap://<dc-fqdn>` after `krbconf <dc>` + a TGT in `KRB5CCNAME`
+  (snippet below). This is the only Linux path in the kit for confidential LDAP.
 
 ### Prescriptive: reach for the tool that *seals* — don't debug the one that can't
 
@@ -51,6 +55,7 @@ the fixes; you mostly need to *pick the right auth*.
 | dMSA / BadSuccessor audit | `nxc ldap … -M badsuccessor` | `badsuccessor.py -action search` |
 | ADCS triage | `certipy find -ldap-scheme ldap …` | `certipy find` (defaults to LDAPS → reset) |
 | Roasting | `nxc ldap … --kerberoasting --asreproast` | — |
+| Read managed pw / set·reset·create password (**confidential**) | `ldapsearch`/`ldapmodify`/`ldapadd -Y GSSAPI` (SASL seal, SSF 256) | `bloodyAD set password`, `changepasswd` (sign-only → confidentiality error) |
 | Full BloodHound graph | `bhcollect <dc> <user> <pass>` (rusthound-ce GSSAPI, *seals*) | `bloodhound-python` / `nxc --bloodhound` (ldap3 → can't seal here) |
 
 `nxc` prints `signing:Enforced` / `channel binding:…` so you know up front what
@@ -74,6 +79,31 @@ per-command `faketime` needed). Add the DC's name to `./hosts`
 (`<ip> DC01.domain.fqdn domain.fqdn`) so Kerberos can resolve the KDC. For a
 one-off you can still wrap a single command in `faketime "<dc-time>" <tool>`;
 `clocksync` just does it for the whole session.
+
+### Sealed (confidential) LDAP pattern — read managed pw / set passwords
+
+For ops the DC only serves over a *confidential* connection (managed-password read,
+`unicodePwd` set/reset, creating a user with a password) when LDAPS is dead, use the
+OpenLDAP clients over SASL GSSAPI — they negotiate sign+**seal** (SSF 256). The
+image already carries the GSSAPI SASL mech + `SASL_NOCANON on`; `krbconf` sets
+`rdns=false` so the SPN is right.
+
+```bash
+scripts/roo shell sh -c '
+DC=<dc-ip>; D=<domain.fqdn>; USER=<user>; PASS=<pass>; FQDN=DC01.$D
+krbconf $DC; clocksync $DC
+getTGT.py -dc-ip $DC "$D/$USER:$PASS"; export KRB5CCNAME=/work/$USER.ccache
+# read a managed password (gMSA/dMSA), sealed:
+ldapsearch -Y GSSAPI -H ldap://$FQDN -o ldif-wrap=no -LLL \
+  -b "<target-dn>" msDS-ManagedPassword
+# set/create a password (unicodePwd, UTF-16LE+base64) — needs the same seal:
+#   ldapadd -Y GSSAPI -H ldap://$FQDN -f user.ldif      (with unicodePwd:: <b64>)
+'
+```
+
+`-Y GSSAPI` must target the DC by **FQDN** (`ldap://DC01.$D`), not IP — the SPN is
+`ldap/<fqdn>`. (Authz still applies: you only get a managed password if you're in
+its `…GroupMSAMembership`, and reset needs `ForceChangePassword`.)
 
 ## Workflow
 
@@ -194,6 +224,7 @@ Everything runs in `net-toolbox` at the tunnel IP via `scripts/roo shell …`:
 | SMB/LDAP/WinRM/MSSQL sweep + modules | `nxc {smb,ldap,winrm,mssql} …` |
 | What can I write? / LDAP read-write (sealed) | `bloodyAD --host … get writable` / `get`/`set`/`add` |
 | Read an object's DACL (sealed) | `nxc ldap … -M daclread -o TARGET_DN=…` |
+| Confidential read/write: managed pw, set/reset/create password | `ldapsearch`/`ldapmodify`/`ldapadd -Y GSSAPI -H ldap://<fqdn>` (SASL seal) |
 | AD CS enum + abuse | `certipy {find -ldap-scheme ldap\|req\|auth} …` |
 | Interactive WinRM | `evil-winrm -i <t> -u U -p P` (or `evil-winrm-py … -k`) |
 | Kerberos tickets | `getTGT.py` / `getST.py` (+ `faketime`) |
@@ -208,8 +239,10 @@ Everything runs in `net-toolbox` at the tunnel IP via `scripts/roo shell …`:
 
 **Auth selector:** password → NTLM (works now, MD4 fixed). Clock skew →
 **`clocksync <dc>`** then Kerberos `-k`. LDAP read/write an ldap3 tool refuses
-(strongerAuthRequired / LDAPS reset) → a tool that **seals**: `nxc ldap` and
-`bloodyAD` both sign NTLM over 389 and just work.
+(strongerAuthRequired / LDAPS reset) → a tool that **signs**: `nxc ldap`,
+`bloodyAD`, impacket-native. **Confidential** op (managed pw / set password) →
+the only thing that **seals**: `ldapsearch`/`ldapmodify -Y GSSAPI` (after `krbconf`
++ TGT).
 
 ### Know a tool's reach before you declare it can't (discipline rule)
 
