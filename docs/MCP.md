@@ -14,11 +14,13 @@ current facts instead of relying on training memory. Two add-ons help a lot:
   for tools/services/frameworks (default creds, version-specific behavior,
   known-good flags). Keyless.
 - **[Exa](https://github.com/exa-labs/exa-mcp-server)** — live web search for
-  advisories, version quirks, and technique write-ups (needs an Exa API key).
+  advisories, version quirks, and technique write-ups. Ships in this repo's
+  `.mcp.json` alongside Playwright.
 
 Neither is required; without them the agent falls back to its own knowledge.
-Both are general-purpose MCPs configured in your harness/Codex config (not
-auto-loaded from this repo), the same way as the Playwright server below.
+Context7 is configured in your harness/Codex config (not auto-loaded from this
+repo), the same way as the Playwright server below; Exa is wired into `.mcp.json`
+directly.
 
 ## What the MCP does
 
@@ -39,7 +41,7 @@ Do not claim to have browser control just because `.mcp.json` exists.
 
 ## Project MCP file
 
-This repo includes `.mcp.json` with a `playwright` server.
+This repo includes `.mcp.json` with `playwright` and `exa` servers.
 
 ## Codex CLI
 

@@ -8,6 +8,9 @@
         "--cdp-endpoint",
         "http://127.0.0.1:9222"
       ]
+    },
+    "exa": {
+      "url": "https://mcp.exa.ai/mcp"
     }
   }
 }
