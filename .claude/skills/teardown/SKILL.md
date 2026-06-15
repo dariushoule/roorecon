@@ -31,9 +31,13 @@ tidies scratch, without throwing away results or the operator's work.
 
 ## Sequence
 
-1. **Close the browser** (if a `roo browser` / CDP session is up). Use the Playwright
-   MCP `browser_close`. The host Chrome runs on a dedicated profile, so closing its
-   last window exits that instance without touching the operator's other browsers.
+1. **Close the browser** (if a `roo browser` / CDP session is up). First, if the
+   Playwright MCP is attached, call `browser_close` to release the CDP page cleanly.
+   Then run **`scripts/roo browser --stop`** — `browser_close` only detaches the page,
+   it leaves the host Chrome *process* running, so this is what actually exits it. It
+   matches only the dedicated roo profile (`.roo/browser-profile`), never the
+   operator's other browsers or the BloodHound stack's browser, and is a no-op if
+   nothing is running.
 2. **Tidy runtime scratch from the working tree.**
    - The Playwright MCP writes snapshots/console logs/screenshots to `.playwright-mcp/`
      in the cwd. Make sure it's git-ignored (it is, in `.gitignore`), then remove it:

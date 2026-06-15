@@ -25,6 +25,7 @@ scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discov
 scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
 scripts/roo dns <domain>                  # DNS subdomain enum, external domain
 scripts/roo dirbust <url>                 # recursive directory/file brute (SecLists)
+scripts/roo sqlmap [args...]              # automated SQL injection detection + exploitation (target-facing)
 scripts/roo fingerprint <url>             # web tech/version detection (whatweb), sharper than nmap
 scripts/roo vulns <target>                # CVE + public-PoC lookup for fingerprints (keyless)
 scripts/roo recon <target>                # simple one-shot phased scan
@@ -35,6 +36,7 @@ scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browse
 scripts/roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
 scripts/roo bloodhound <up|ingest|view|open|down> [zip]   # local BloodHound CE: ingest a collection, view the graph
 scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
+scripts/roo catch <up|attach|status|send|capture|down> [port|cmd]  # persistent shared reverse-shell catcher (pwncat)
 scripts/roo responder [args...]           # LLMNR/NBT-NS/mDNS poisoning + capture (tunnel iface)
 scripts/roo ip                            # print the tunnel IP (your LHOST)
 scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
@@ -147,6 +149,13 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
 - **dirbust** (`.claude/skills/dirbust/SKILL.md`) — recursive web content
   discovery. `scripts/roo dirbust <url>` drives gobuster breadth-first over
   discovered directories (SecLists baked in), streaming each hit live.
+- **sqlmap** (`.claude/skills/sqlmap/SKILL.md`) — automated SQL injection
+  detection + exploitation. `scripts/roo sqlmap [args...]` is a target-facing
+  passthrough to sqlmap (prefix `ROO_NET=container:roorecon-vpn` for VPN boxes)
+  that confirms an injection point, enumerates the DB, and dumps tables/creds —
+  defaulting `--batch` (no hanging prompts) and `--output-dir recon-results/sqlmap`
+  (session cached, loot persisted). Recon/dirbust/vuln-research hand an injectable
+  param here; dumped hashes hand off to **hashcat**, plaintext creds to reuse/**ad**.
 - **vuln-research** (`.claude/skills/vuln-research/SKILL.md`) — CVE + public-PoC
   lookup for recon fingerprints. `scripts/roo vulns <target>` maps each
   product/version to CVEs (NVD/KEV/EPSS) and exploits (GitHub/Exploit-DB/
@@ -190,6 +199,14 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   to stage onto a target. `get` defaults to the **fresh main/branch build** over
   stale release tags (Rubeus-style — override with `--release`/`--ref`). Downloads
   egress the public internet, never the VPN. Triggers on "grab a windows tool".
+- **catch** (`.claude/skills/catch/SKILL.md`) — persistent, shared reverse-shell
+  catcher. `scripts/roo catch up [port]` stands up **pwncat-cs in a tmux session**
+  inside a detached, tunnel-bound `net-toolbox` container, prints the LHOST/port +
+  paste-ready revshell one-liners, and listens. Both parties drive the *same*
+  caught shell, drop-in/drop-out: the operator with `roo catch attach` (TTY), the
+  agent with `roo catch send <cmd>` / `roo catch capture`. pwncat brings platform
+  detection + `upload`/`download` (downloads default to `.roo/catch/`). Containers
+  are named `roorecon-catch-<port>` so they're killable and swept by **teardown**.
 - **teardown** (`.claude/skills/teardown/SKILL.md`) — clean end-of-engagement
   shutdown. Closes the browser, drops the proxy then the VPN tunnel (last), tidies
   Playwright MCP scratch (`.playwright-mcp/`) out of the tree, and verifies no

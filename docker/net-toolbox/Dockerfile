@@ -47,7 +47,9 @@ ENV PIPX_HOME=/opt/pipx \
 
 # Operator toolset for engagement-network work, in four groups:
 #  - ad-hoc clients you'd reach for at the tunnel IP: smbclient, ldapsearch,
-#    dig, curl/wget, nc/ncat/socat — the "jump box" basics.
+#    dig, curl/wget, nc/ncat/socat, ssh/scp (openssh-client + sshpass for
+#    non-interactive password auth and scp-ing loot/tools up to a foothold) —
+#    the "jump box" basics.
 #  - AD attack tooling: impacket example CLIs (secretsdump/GetUserSPNs/…),
 #    NetExec (nxc), Certipy (AD CS), bloodyAD (LDAP read/write that *seals* — reads
 #    DACLs and runs dMSA/BadSuccessor add/modify on signing-enforced DCs where the
@@ -63,6 +65,8 @@ ENV PIPX_HOME=/opt/pipx \
 #    skew is the #1 Kerberos footgun on lab DCs (KRB_AP_ERR_SKEW); libfaketime
 #    shifts the container clock to the DC's without root/CAP_SYS_TIME — see the
 #    `ad` skill.
+#  - reverse-shell catcher: pwncat-cs — see the dedicated uv/Python-3.11 stage
+#    below (it can't run on the image's Python 3.13), driven by `roo catch`.
 #  - quality-of-life: rlwrap (readline/history + arrow keys on raw reverse
 #    shells — `roo shell rlwrap nc -lvnp 4444`), tmux, vim-tiny, less.
 #
@@ -74,6 +78,7 @@ RUN apt-get update \
       ncat netcat-traditional socat \
       python3 python3-pip python3-dev pipx \
       smbclient ldap-utils libsasl2-modules-gssapi-mit dnsutils iputils-ping \
+      openssh-client sshpass \
       krb5-user krb5-pkinit faketime rlwrap \
       ruby ruby-dev \
       build-essential libffi-dev libssl-dev libkrb5-dev \
@@ -87,6 +92,26 @@ RUN apt-get update \
  && pipx install bloodhound-ce \
  && gem install --no-document evil-winrm \
  && rm -rf /var/lib/apt/lists/*
+
+# pwncat-cs (0.5.4, last released 2023) predates Python 3.12: it calls the removed
+# loader.find_module() and imports the removed-from-stdlib `pkg_resources`, so it
+# crashes the moment a session starts on the image's Python 3.13 (`roo catch` saw
+# the listener container exit instantly). Give it its own standalone CPython 3.11
+# (fetched by uv — a relocatable, distro-agnostic build) in a dedicated venv: 3.11
+# carries distutils + find_module in its stdlib, and pinning setuptools<81 keeps a
+# pkg_resources that still resolves modern (normalized) dist names like
+# zope.interface. Symlink the entrypoint onto PATH for `roo catch`.
+#
+# UV_PYTHON_INSTALL_DIR pins the interpreter under /opt, NOT uv's default ~/.local:
+# `roo shell`/`roo catch` bind a host dir over /root (_home_mount), which would
+# otherwise hide the interpreter the venv points at and make pwncat exit instantly.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+ && UV=/root/.local/bin/uv \
+ && $UV python install 3.11 \
+ && $UV venv --python 3.11 /opt/pwncat \
+ && VIRTUAL_ENV=/opt/pwncat $UV pip install pwncat-cs 'setuptools<81' \
+ && ln -sf /opt/pwncat/bin/pwncat-cs /usr/local/bin/pwncat-cs
 
 # Responder (lgandx) — LLMNR/NBT-NS/mDNS poisoner + rogue SMB/HTTP/etc. servers
 # for capturing NetNTLMv1/v2 on the engagement LAN. NOT on PyPI under this name
