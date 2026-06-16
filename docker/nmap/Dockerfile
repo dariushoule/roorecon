@@ -1,5 +1,5 @@
 # roorecon/nmap — minimal nmap on debian-slim.
-# Built on demand by scripts/roo; tagged with a hash of this file so any edit
+# Built on demand by ./roo; tagged with a hash of this file so any edit
 # triggers a rebuild. Keep it lean: no recommended extras, no apt cache.
 FROM debian:stable-slim
 

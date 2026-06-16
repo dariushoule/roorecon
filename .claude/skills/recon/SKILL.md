@@ -6,7 +6,7 @@ description: Network, service, and web enumeration for authorized pentesting and
 # Recon & Enumeration
 
 Methodology and tooling for mapping the attack surface of an authorized target.
-This skill drives the `roo` CLI (`scripts/roo …`) and interprets its output to
+This skill drives the `roo` CLI (`./roo …`) and interprets its output to
 decide what to attack next.
 
 ## Scope guardrail (read first)
@@ -24,8 +24,8 @@ this skill does not cross.
    CIDR, or CTF box IP. If given a hostname, resolve it first — a name may map to
    an internal IP or may not resolve at all without a `./hosts` entry (ask the
    user for the IP if so). If the target is internal/VPN-only (RFC1918, CGNAT, or
-   an HTB/THM box), ensure the VPN sidecar is up (`scripts/roo vpn status`; start
-   with `scripts/roo vpn up`) and prefix scans with `ROO_NET=container:roorecon-vpn`.
+   an HTB/THM box), ensure the VPN sidecar is up (`./roo vpn status`; start
+   with `./roo vpn up`) and prefix scans with `ROO_NET=container:roorecon-vpn`.
    If no `.ovpn` exists in `./vpn/`, ask the user for one before scanning. See
    CLAUDE.md "Networking & VPN" for the full rules.
 2. **Pick a path.** For CTF speed use the **fast path** (streaming sweep +
@@ -34,15 +34,15 @@ this skill does not cross.
 3. **Triage and go deeper as results land** — the fast path does this per port
    via buckaroos; the simple path after both phases finish.
 4. **Research known vulns + exploits.** Once services are fingerprinted, run
-   `scripts/roo vulns <target>` to map each product/version to relevant CVEs and
+   `./roo vulns <target>` to map each product/version to relevant CVEs and
    public PoCs (GitHub/Exploit-DB/Metasploit), ranked by exploitability. Sharpen
-   shaky web versions first with `scripts/roo fingerprint <url>`. This is the
+   shaky web versions first with `./roo fingerprint <url>`. This is the
    **vuln-research** skill — see `.claude/skills/vuln-research/SKILL.md`. Note:
    CVE lookups go to the public internet, **not** through the VPN (don't prefix
    `roo vulns` with `ROO_NET`).
 5. **Summarize.** Give the user a ranked "attack these first" list with the
    evidence (port, service, version, known CVEs/PoCs, why it's interesting).
-   Generate the report artifact with `scripts/roo report <target>` →
+   Generate the report artifact with `./roo report <target>` →
    `recon-results/<target>/report.md` (open-ports/fingerprint table, hostnames,
    the vuln-research findings, per-port facts + your notes).
 
@@ -61,7 +61,7 @@ discover ports and deep-dive each one in parallel.
 1. **Launch the sweep in the background** (don't block on it):
 
    ```bash
-   scripts/roo sweep <target>          # prefix ROO_NET=container:roorecon-vpn for VPN
+   ./roo sweep <target>          # prefix ROO_NET=container:roorecon-vpn for VPN
    ```
 
    It runs a full TCP `-p-` SYN scan and a UDP top-200 scan concurrently and, the
@@ -76,7 +76,7 @@ discover ports and deep-dive each one in parallel.
    *hybrid*: the script gathers facts, you interpret.
 
    ```bash
-   scripts/roo buckaroo <target> <proto> <port>   # → ports/<proto>-<port>/facts.md
+   ./roo buckaroo <target> <proto> <port>   # → ports/<proto>-<port>/facts.md
    ```
 
    Then read `facts.md`, identify the service/version and notable script output,
@@ -93,7 +93,7 @@ discover ports and deep-dive each one in parallel.
 ## Simple path — one-shot phased scan
 
 ```bash
-scripts/roo recon <target>
+./roo recon <target>
 # → recon-results/<target>/summary.txt  (+ all-ports.* and services.*)
 ```
 
@@ -113,9 +113,9 @@ redirects to `box.htb` → add to hosts → find `admin.box.htb`" loop.
    so every tool container resolves it.
 3. **Enumerate more names** — branch on the target:
    - **Internal IP (RFC1918/VPN)** → vhost fuzz the Host header:
-     `scripts/roo vhost <ip> <domain>` → `recon-results/<ip>/vhosts.txt`.
+     `./roo vhost <ip> <domain>` → `recon-results/<ip>/vhosts.txt`.
    - **External domain** → DNS subdomain brute:
-     `scripts/roo dns <domain>` → `recon-results/<domain>/subdomains.txt`.
+     `./roo dns <domain>` → `recon-results/<domain>/subdomains.txt`.
    Both stream hits live and default to a fast wordlist; pass
    `--wordlist combined_subdomains.txt` (baked, thorough) or
    `ROO_WORDLIST=<host path>` for a custom list.
@@ -124,22 +124,22 @@ redirects to `box.htb` → add to hosts → find `admin.box.htb`" loop.
 
 ## Tooling runs in containers
 
-Every CLI runs in a minimal Docker image via `roo` (`scripts/roo` on Unix,
-`scripts\roo.cmd` on PowerShell), identical across Linux/macOS/Windows. Needs
+Every CLI runs in a minimal Docker image via `roo` (`./roo` on Unix,
+`roo.cmd` on PowerShell), identical across Linux/macOS/Windows. Needs
 Docker running and Python 3; a tool's first use builds its image. Prefix
 VPN-only targets with `ROO_NET=container:roorecon-vpn`.
 
 **Need an ad-hoc client (curl, wget, nc, dig)?** No `roo run` image exists for
-those — run them at the tunnel IP with `scripts/roo shell <cmd>`. `roo run` is
+those — run them at the tunnel IP with `./roo shell <cmd>`. `roo run` is
 only for tools with a dedicated image (nmap, gobuster); see CLAUDE.md "Which box
 has which tool."
 
 ## Common snags (don't rabbit-hole)
 
 - **VPN configs live in `./vpn/`.** Asked to "connect to `foo.ovpn`"? Run
-  `scripts/roo vpn up foo.ovpn` — `roo` resolves a bare name against `./vpn/`, so
+  `./roo vpn up foo.ovpn` — `roo` resolves a bare name against `./vpn/`, so
   don't hunt for or guess a full path. Only one config there? Plain
-  `scripts/roo vpn up` auto-picks it.
+  `./roo vpn up` auto-picks it.
 - **Docker Hub 429 / "toomanyrequests" on a first image build** → the fix is
   **`docker login`** (authenticated pulls have a far higher rate limit), then
   re-run. Don't retag/alias base images or edit Dockerfiles to dodge the limit.
@@ -158,19 +158,19 @@ has which tool."
     **switch to the `ad` skill** (`.claude/skills/ad/SKILL.md`). It owns the
     credentialed sweep (`nxc`/`bloodyAD`), the privesc triage (BadSuccessor / ADCS /
     delegation / ACLs), and the graph (`bhcollect` → `roo bloodhound`). Add the DC's
-    domain + hostname to `./hosts` first — `scripts/roo shell nxc smb <ip>` reveals
+    domain + hostname to `./hosts` first — `./roo shell nxc smb <ip>` reveals
     them.
-  - HTTP/HTTPS → recursive content discovery (`scripts/roo dirbust <url>`, see
+  - HTTP/HTTPS → recursive content discovery (`./roo dirbust <url>`, see
     the **dirbust** skill) + vhost enum; buckaroo already whatweb-fingerprints the
-    port, but re-run `scripts/roo fingerprint http://<hostname>/` on a discovered
+    port, but re-run `./roo fingerprint http://<hostname>/` on a discovered
     vhost to fingerprint the real app; check `robots.txt`, source, headers,
     default creds.
-  - SMB (139/445) → `scripts/roo shell nxc smb <t> [-u U -p P] --shares --users`,
+  - SMB (139/445) → `./roo shell nxc smb <t> [-u U -p P] --shares --users`,
     null/guest sessions. On a DC, use the **ad** skill.
   - FTP (21) → anonymous login, writable dirs.
   - SSH (22) → note version for the CVE lookup and for credential reuse later.
   - DB ports (3306/5432/1433/27017/6379) → default creds, unauth access.
-- **Map versions to known vulns/PoCs** with `scripts/roo vulns <target>` (the
+- **Map versions to known vulns/PoCs** with `./roo vulns <target>` (the
   **vuln-research** skill) — it ranks CVEs by exploitability and finds public
   exploits. Run it once services are fingerprinted.
 - Keep notes per target. Recon is iterative — new creds/hosts feed back in.

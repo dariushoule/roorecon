@@ -1,7 +1,7 @@
 # MCP setup
 
 RooRecon *integrates* MCP for companion browser control — scanning and reporting
-run through `scripts/roo` and need no MCP. Two further MCP servers are
+run through `./roo` and need no MCP. Two further MCP servers are
 **recommended (optional)** because they sharpen the agent's advice rather than
 add a tool: see "Recommended knowledge MCPs" below.
 
@@ -24,7 +24,7 @@ directly.
 
 ## What the MCP does
 
-`scripts/roo browser [url]` launches a host browser with a persistent profile,
+`./roo browser [url]` launches a host browser with a persistent profile,
 VPN SOCKS routing, and a local CDP endpoint at `http://127.0.0.1:9222`.
 
 The Playwright MCP attaches to that CDP endpoint so an agent can inspect and
@@ -68,7 +68,7 @@ Before asking the agent to browse:
 1. Start the target browser:
 
    ```sh
-   scripts/roo browser http://<target>/
+   ./roo browser http://<target>/
    ```
 
 2. Confirm the harness has loaded the Playwright MCP.

@@ -8,10 +8,19 @@ skills Claude Code uses, so there's one source of truth.
 Each skill is a markdown playbook. When a task matches, read the file in full,
 then follow its workflow and drive its helper scripts.
 
+A SKILL.md is a **router + cross-cutting judgment**; deep, cherry-picked technique
+mechanics live in `<skill>/runbooks/<technique>.md` and are read **only when that
+path is live** (progressive disclosure — keeps the always-loaded skill lean). When
+a SKILL.md's dispatch menu points you at a runbook (e.g. the **ad** skill →
+`runbooks/badsuccessor.md` once `nxc -M badsuccessor` flags a Server 2025 OU), read
+that file then. When *authoring*: keep the workflow/footguns/auth tables inline,
+extract only genuinely deep + niche technique detail, and always name a runbook
+with a one-line trigger so it isn't orphaned. See CLAUDE.md "Keep SKILL.md lean".
+
 - **recon** → `.claude/skills/recon/SKILL.md`
-  Network/service/web enumeration. Fast path: `scripts/roo sweep` streams open
-  ports while per-port `scripts/roo buckaroo` deep-dives each; simple path:
-  `scripts/roo recon`. Findings stream to the CLI as found; `scripts/roo report`
+  Network/service/web enumeration. Fast path: `./roo sweep` streams open
+  ports while per-port `./roo buckaroo` deep-dives each; simple path:
+  `./roo recon`. Findings stream to the CLI as found; `./roo report`
   assembles the final document. Produces a prioritized attack list.
   Use for: "recon", "enumerate", "scan", "what's open on this box", "where do
   I start on this target".
@@ -19,7 +28,7 @@ then follow its workflow and drive its helper scripts.
   Active Directory enumeration + attack-path runbook. Recon hands off here on a
   DC profile (Kerberos+LDAP+SMB), or start here when you hold domain creds. Drives
   `net-toolbox` AD tooling (`nxc`, `bloodyAD`, `certipy`, `evil-winrm`, impacket) via
-  `scripts/roo shell`: domain ID → unauth footholds → credentialed sweep
+  `./roo shell`: domain ID → unauth footholds → credentialed sweep
   (shares/users/roast/BloodHound/ADCS) → triage to DA (delegation, ESCs,
   BadSuccessor on Server 2025, DCSync). Carries the auth footgun cheat-sheet
   (MD4, clock skew→faketime, LDAP signing→nxc). Use for: "active directory",
@@ -27,18 +36,18 @@ then follow its workflow and drive its helper scripts.
   "certipy/ADCS", "BadSuccessor", "DCSync", "evil-winrm", "what can I do on this DC".
 - **bloodhound** → `.claude/skills/bloodhound/SKILL.md`
   Stand up BloodHound CE locally and load AD collection data to view the attack
-  graph. `scripts/roo bloodhound view <zip>` brings up the host-local CE stack
+  graph. `./roo bloodhound view <zip>` brings up the host-local CE stack
   (postgres+neo4j+web, *not* in the tunnel), ingests a collection over the REST
   API, and opens it in the browser. Analysis not attack; collection is the **ad**
   skill's job. Use for: "open bloodhound", "visualize the domain", "graph the AD",
   "show me paths to DA", "ingest this collection".
 - **dirbust** → `.claude/skills/dirbust/SKILL.md`
-  Recursive web content discovery: `scripts/roo dirbust <url>` drives gobuster
+  Recursive web content discovery: `./roo dirbust <url>` drives gobuster
   breadth-first over discovered directories (SecLists baked in), streaming hits.
   Use for: "dirbust", "directory brute", "content discovery", "find hidden
   paths/files", "fuzz endpoints".
 - **sqlmap** → `.claude/skills/sqlmap/SKILL.md`
-  Automated SQL injection detection + exploitation: `scripts/roo sqlmap [args...]`
+  Automated SQL injection detection + exploitation: `./roo sqlmap [args...]`
   is a target-facing passthrough to sqlmap (prefix `ROO_NET=container:roorecon-vpn`
   for VPN boxes) — confirms an injection point, enumerates the DB, dumps
   tables/creds. Defaults `--batch` (no hanging prompts) and `--output-dir
@@ -46,14 +55,14 @@ then follow its workflow and drive its helper scripts.
   hand off to **hashcat**, plaintext creds to reuse/**ad**. Use for: "sqlmap",
   "SQL injection", "SQLi", "dump the users table", "is this param injectable".
 - **vuln-research** → `.claude/skills/vuln-research/SKILL.md`
-  CVE + public-PoC lookup for recon fingerprints: `scripts/roo vulns <target>`
+  CVE + public-PoC lookup for recon fingerprints: `./roo vulns <target>`
   maps product/version → CVEs (NVD/KEV/EPSS) and exploits (GitHub/Exploit-DB/
-  Metasploit), ranked; `scripts/roo fingerprint <url>` (whatweb) sharpens web
+  Metasploit), ranked; `./roo fingerprint <url>` (whatweb) sharpens web
   versions first. CVE lookups hit the public internet, **never the VPN** — don't
   prefix `roo vulns` with `ROO_NET`. Use for: "CVE", "known vulnerabilities",
   "exploits for X", "is X vulnerable", "public PoC", "searchsploit".
 - **browse** → `.claude/skills/browse/SKILL.md`
-  Companion web browsing: `scripts/roo browser [url]` launches a host browser
+  Companion web browsing: `./roo browser [url]` launches a host browser
   routed through the VPN (SOCKS) with a CDP port; the agent attaches via the
   Playwright MCP (`.mcp.json`, needs Node) and drives the same browser the
   operator uses — authenticated enumeration, network/console capture, repro flows.
@@ -63,14 +72,14 @@ then follow its workflow and drive its helper scripts.
   tools are not visible in the current harness, you cannot drive the browser yet;
   tell the operator to enable the MCP and continue with CLI-based enumeration.
 - **hashcat** → `.claude/skills/hashcat/SKILL.md`
-  Offline hash cracking on the host GPU. `scripts/roo hashcat` runs the real
+  Offline hash cracking on the host GPU. `./roo hashcat` runs the real
   hashcat (auto-installs on first use — a host-tool exception, never
-  target-facing); `scripts/roo wordlist` fetches SecLists password lists (default
+  target-facing); `./roo wordlist` fetches SecLists password lists (default
   rockyou). Identify the hash → mode (`-m`) via hashcat's example-hashes wiki, then
   wordlist→rules→mask. The **ad** skill hands roasts here. Use for: "help me crack
   this hash", "crack this NTLM/NetNTLMv2/kerberoast hash", "what hashcat mode".
 - **memforensics** → `.claude/skills/memforensics/SKILL.md`
-  Offline memory-image forensics. `scripts/roo vol <image> creds` runs volatility3's
+  Offline memory-image forensics. `./roo vol <image> creds` runs volatility3's
   credential trifecta (SAM hashdump + LSA secrets + cached domain creds) over a
   local RAM dump / VM memory snapshot (`.vmem`/`.dmp`/`hiberfil`); `… <plugin>`
   passes through any volatility3 plugin, `… strings` does a cleartext/flag sweep.
@@ -80,14 +89,14 @@ then follow its workflow and drive its helper scripts.
 - **wintools** → `.claude/skills/wintools/SKILL.md`
   Fetch prebuilt Windows offensive tooling (GhostPack/Rubeus, SharpHound, Certify,
   the *Potato suite, …) from the Forge registry into a **shared, off-host `/tools`
-  Docker volume**: `scripts/roo tools list|builds|get|installed|rm`. Binaries land
+  Docker volume**: `./roo tools list|builds|get|installed|rm`. Binaries land
   in the Docker VM (not a host path EDR scans) and show at `/tools` in every `roo
   shell` to stage onto a target; downloads egress the public internet, never the
   VPN. `get` prefers the **fresh main/branch build** over stale release tags
   (Rubeus-style; override `--release`/`--ref`). Use for: "grab a windows tool",
   "download Rubeus/SharpHound", "I need <SharpX>".
 - **catch** → `.claude/skills/catch/SKILL.md`
-  Persistent, shared reverse-shell catcher: `scripts/roo catch up [port]` runs
+  Persistent, shared reverse-shell catcher: `./roo catch up [port]` runs
   pwncat-cs in a tmux session inside a detached, tunnel-bound net-toolbox container
   and prints the LHOST/port + paste-ready revshell one-liners. Both parties drive
   the same caught shell, drop-in/drop-out — operator `roo catch attach` (TTY),
@@ -106,40 +115,40 @@ then follow its workflow and drive its helper scripts.
 
 All CLIs run in containers, never from the host, so behavior is identical across
 Linux/macOS/Windows. The single entry point is the cross-platform `roo` CLI
-(`scripts/roo.py`) — `scripts/roo` on Unix, `scripts\roo.cmd` from
-PowerShell/cmd. Subcommands:
+(`scripts/roo.py`) — `./roo` from the repo root on Unix/macOS, `.\roo` from
+PowerShell/cmd (or just `roo` with the repo root on `PATH`). Subcommands:
 
 ```bash
-scripts/roo run <tool> [args...]          # e.g. scripts/roo run nmap -sCV -p- <t>
-scripts/roo sweep <target>                # streaming parallel TCP+UDP discovery
-scripts/roo buckaroo <target> <proto> <port>   # per-port enum + hostname discovery
-scripts/roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
-scripts/roo dns <domain>                  # DNS subdomain enum, external domain
-scripts/roo dirbust <url>                 # recursive directory/file brute (SecLists)
-scripts/roo sqlmap [args...]              # automated SQL injection detection + exploitation (target-facing)
-scripts/roo fingerprint <url>             # web tech/version detection (whatweb)
-scripts/roo vulns <target>                # CVE + public-PoC lookup (keyless; not tunneled)
-scripts/roo recon <target>                # simple one-shot phased scan
-scripts/roo report <target>               # assemble per-port facts+notes into report.md
-scripts/roo vol <image> <plugin|creds|strings>  # offline memory forensics (volatility3) on a RAM dump
-scripts/roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
-scripts/roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp)
-scripts/roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
-scripts/roo bloodhound <up|ingest|view|open|down> [zip]   # local BloodHound CE: ingest + view the graph
-scripts/roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
-scripts/roo catch <up|attach|status|send|capture|down> [port|cmd]  # persistent shared reverse-shell catcher (pwncat)
-scripts/roo responder [args...]           # LLMNR/NBT-NS/mDNS poisoning + capture (tunnel iface)
-scripts/roo ip                            # print the tunnel IP (your LHOST)
-scripts/roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
-scripts/roo hashcat [args...]             # GPU password cracking on the HOST (auto-installs)
-scripts/roo wordlist [name]               # fetch a SecLists password list (default rockyou)
-scripts/roo tools <list|builds|get|installed|rm> [name]  # prebuilt Windows tools → off-host /tools (prefers main builds)
+./roo run <tool> [args...]          # e.g. ./roo run nmap -sCV -p- <t>
+./roo sweep <target>                # streaming parallel TCP+UDP discovery
+./roo buckaroo <target> <proto> <port>   # per-port enum + hostname discovery
+./roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
+./roo dns <domain>                  # DNS subdomain enum, external domain
+./roo dirbust <url>                 # recursive directory/file brute (SecLists)
+./roo sqlmap [args...]              # automated SQL injection detection + exploitation (target-facing)
+./roo fingerprint <url>             # web tech/version detection (whatweb)
+./roo vulns <target>                # CVE + public-PoC lookup (keyless; not tunneled)
+./roo recon <target>                # simple one-shot phased scan
+./roo report <target>               # assemble per-port facts+notes into report.md
+./roo vol <image> <plugin|creds|strings>  # offline memory forensics (volatility3) on a RAM dump
+./roo vpn <up|down|status> [cfg]    # OpenVPN sidecar (the "location")
+./roo proxy <up|down|status>        # SOCKS5 egress for host tools (browser/Burp)
+./roo browser [url]                 # host browser, VPN-proxied + agent-drivable over CDP
+./roo bloodhound <up|ingest|view|open|down> [zip]   # local BloodHound CE: ingest + view the graph
+./roo shell [cmd...]                # operator shell at the tunnel IP (reverse shells, hosting)
+./roo catch <up|attach|status|send|capture|down> [port|cmd]  # persistent shared reverse-shell catcher (pwncat)
+./roo responder [args...]           # LLMNR/NBT-NS/mDNS poisoning + capture (tunnel iface)
+./roo ip                            # print the tunnel IP (your LHOST)
+./roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
+./roo hashcat [args...]             # GPU password cracking on the HOST (auto-installs)
+./roo wordlist [name]               # fetch a SecLists password list (default rockyou)
+./roo tools <list|builds|get|installed|rm> [name]  # prebuilt Windows tools → off-host /tools (prefers main builds)
 ```
 
 It builds `docker/<tool>/Dockerfile` on demand and mounts the cwd at `/work`;
 images are tagged by a hash of the tool's build context (Dockerfile + any COPY'd
 files), so an edit to either rebuilds on the next run. VPN-only target? Join the sidecar's netns:
-`ROO_NET=container:roorecon-vpn scripts/roo run nmap ...`.
+`ROO_NET=container:roorecon-vpn ./roo run nmap ...`.
 
 **Architecture:** the VPN sidecar is a *location* (owns the tunnel namespace);
 everything else is a *tool* that runs in it. `proxy`/`shell`/`fwd` are run-modes
@@ -158,9 +167,9 @@ adding a tool, skill, or network capability.
   the box's IP) or DNS over the VPN. If you can't resolve a name and don't have
   its IP, **ask the user** rather than scanning blind.
 - **Require a tunnel before scanning such a target.** Check
-  `scripts/roo vpn status`; if down, `scripts/roo vpn up`, then route tools
-  through it: `ROO_NET=container:roorecon-vpn scripts/roo sweep <target>`.
-- **If no OpenVPN config is present, ask for one.** `scripts/roo vpn up` looks
+  `./roo vpn status`; if down, `./roo vpn up`, then route tools
+  through it: `ROO_NET=container:roorecon-vpn ./roo sweep <target>`.
+- **If no OpenVPN config is present, ask for one.** `./roo vpn up` looks
   for a `.ovpn` in `./vpn/`. If there is none, STOP and ask the user to drop
   their `.ovpn` into `./vpn/` (git-ignored) — never scan a VPN-only target
   without it.
@@ -189,8 +198,10 @@ adding a tool, skill, or network capability.
 ## Layout
 
 - `.claude/skills/<name>/SKILL.md` — skill playbooks (source of truth).
+- `.claude/skills/<name>/runbooks/<technique>.md` — deep per-technique deep-dives,
+  read on demand when a skill routes to them (progressive disclosure).
+- `roo`, `roo.cmd` — repo-root entrypoints (thin shims to `scripts/roo.py`).
 - `scripts/roo.py` — the cross-platform `roo` CLI (all tooling + automation).
-- `scripts/roo`, `scripts/roo.cmd` — Unix and Windows shims to it.
 - `docker/<tool>/Dockerfile` — one minimal image per CLI.
 - `docs/MCP.md` — MCP setup notes for browser control across harnesses.
 - `recon-results/` — scan output (git-ignored).

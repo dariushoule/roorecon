@@ -36,8 +36,8 @@ roo wordlist --list          # known aliases (rockyou, darkweb2017-top10000, xat
   (e.g. `Leaked-Databases/rockyou.txt.tar.gz`). It prints **only** the path on
   stdout, so capture it:
   ```bash
-  WL=$(scripts/roo wordlist rockyou)             # PowerShell: $WL = scripts\roo.cmd wordlist rockyou
-  scripts/roo hashcat -m 1000 ntlm.txt "$WL"
+  WL=$(./roo wordlist rockyou)             # PowerShell: $WL = roo.cmd wordlist rockyou
+  ./roo hashcat -m 1000 ntlm.txt "$WL"
   ```
 - **Bundled rules** live in the hashcat dir and resolve as `rules/<name>.rule`
   (hashcat runs from its own folder). v7 ships `best66.rule` (the old `best64`),
@@ -94,7 +94,7 @@ each candidate is a cheap way to confirm format parses.
 ### 2. Get a wordlist
 
 ```bash
-WL=$(scripts/roo wordlist)            # default: rockyou (133 MB), the right first try
+WL=$(./roo wordlist)            # default: rockyou (133 MB), the right first try
 ```
 Bigger guns when rockyou is dry: `roo wordlist xato-1m`, `roo wordlist top-1m`, or
 any SecLists Passwords path. CTF passwords usually fall to **rockyou + a rule**.
@@ -103,11 +103,11 @@ any SecLists Passwords path. CTF passwords usually fall to **rockyou + a rule**.
 
 ```bash
 H=kr.txt; M=19700                                      # your hash file + mode
-scripts/roo hashcat -m $M $H "$WL"                     # 1) straight wordlist
-scripts/roo hashcat -m $M $H "$WL" -r rules/best66.rule        # 2) + a fast rule
-scripts/roo hashcat -m $M $H "$WL" -r rules/rockyou-30000.rule # 3) + a heavier rule
-scripts/roo hashcat -m $M $H -a 3 '?u?l?l?l?l?d?d?d?d?!'       # 4) targeted mask (last resort)
-scripts/roo hashcat -m $M $H --show                   # read what cracked (from the potfile)
+./roo hashcat -m $M $H "$WL"                     # 1) straight wordlist
+./roo hashcat -m $M $H "$WL" -r rules/best66.rule        # 2) + a fast rule
+./roo hashcat -m $M $H "$WL" -r rules/rockyou-30000.rule # 3) + a heavier rule
+./roo hashcat -m $M $H -a 3 '?u?l?l?l?l?d?d?d?d?!'       # 4) targeted mask (last resort)
+./roo hashcat -m $M $H --show                   # read what cracked (from the potfile)
 ```
 
 - `-a 0` (default) = wordlist; `-r` layers rules on it; `-a 3` = brute/mask.

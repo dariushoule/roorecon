@@ -8,7 +8,7 @@ description: Drive a real web browser as a companion to the operator during auth
 A native host browser, routed through the VPN, that you and the operator drive
 *together*. The operator browses normally; you tap in over CDP (the Playwright
 MCP) to look around, reproduce a flow, or enumerate when asked. Launched by
-`scripts/roo browser`; you attach to the **same** browser instance.
+`./roo browser`; you attach to the **same** browser instance.
 
 ## Scope guardrail
 
@@ -20,8 +20,8 @@ a specific state-changing action. The operator owns destructive/irreversible ste
 
 ## Setup (operator does this once)
 
-1. **Tunnel up:** `scripts/roo vpn up` (the box must be reachable).
-2. **Launch:** `scripts/roo browser http://<target>/` — starts the host browser
+1. **Tunnel up:** `./roo vpn up` (the box must be reachable).
+2. **Launch:** `./roo browser http://<target>/` — starts the host browser
    with a persistent, git-ignored profile (`.roo/browser-profile`), routed through
    the VPN SOCKS proxy (auto-started; remote DNS, so `box.htb` resolves via
    `./hosts`), with a CDP port (default `9222`) open for you.
@@ -77,11 +77,11 @@ The operator is a person actively using this browser. Be a considerate co-driver
 
 Browsing is reconnaissance with a real client — loop the results into the rest:
 
-- New paths/endpoints → `scripts/roo dirbust <url>` (the **dirbust** skill) to brute
+- New paths/endpoints → `./roo dirbust <url>` (the **dirbust** skill) to brute
   around them; note them for manual testing.
 - New hostnames (redirects, links, JS config) → add to `./hosts`, then
-  `scripts/roo vhost <ip> <domain>` and re-buckaroo.
-- Confirmed product/version → `scripts/roo vulns` (the **vuln-research** skill).
+  `./roo vhost <ip> <domain>` and re-buckaroo.
+- Confirmed product/version → `./roo vulns` (the **vuln-research** skill).
 - Interesting requests/params → record them in the engagement notes / report.
 
 ## Networking notes
@@ -89,7 +89,7 @@ Browsing is reconnaissance with a real client — loop the results into the rest
 - Browser traffic egresses through the **VPN tunnel** via the SOCKS proxy (remote
   DNS). The **CDP** channel (`127.0.0.1:9222`) is **local** — your control plane,
   not tunneled, not exposed to the target.
-- `scripts/roo browser --no-proxy` browses direct (off-VPN) — only for non-tunnel
+- `./roo browser --no-proxy` browses direct (off-VPN) — only for non-tunnel
   targets; it's flagged loudly because it bypasses the engagement path.
 - The profile persists between runs (logins/cookies stick), so the operator doesn't
   re-auth every session. It's under `.roo/` (git-ignored).

@@ -7,8 +7,8 @@ description: CVE and public-exploit (PoC) research for authorized pentesting and
 
 Turn recon fingerprints (service → product → version) into a ranked, evidence-backed
 list of relevant CVEs and **public exploit PoCs**, then triage what's actually
-exploitable on this box. Driven by `scripts/roo vulns` (keyless data sources) and
-`scripts/roo fingerprint` (whatweb), plus your own page-pulls and web search.
+exploitable on this box. Driven by `./roo vulns` (keyless data sources) and
+`./roo fingerprint` (whatweb), plus your own page-pulls and web search.
 
 This runs as the **post-fingerprint phase of recon** and **standalone**.
 
@@ -37,13 +37,13 @@ especially for web apps, before looking anything up.
   http/https port (against the IP) and drops `fingerprint.json` in the port dir, which
   `roo vulns` mines for app/library versions (WordPress, PHP, Tomcat, …) — so a versioned
   app nmap only labels "http" still gets a CVE lookup, automatically.
-- **Re-fingerprint a discovered hostname/vhost** → `scripts/roo fingerprint
+- **Re-fingerprint a discovered hostname/vhost** → `./roo fingerprint
   http://<hostname>/` (prefix `ROO_NET=container:roorecon-vpn` for a VPN-only target).
   The buckaroo hits the IP, so a vhost-only app (the IP just 301s to `box.htb`) needs an
   explicit run against the hostname — once it's in `./hosts` — to see the real app. Also
   use it for a deeper/aggressive re-scan.
 - **Then mine pages by hand** for version strings whatweb misses (use
-  `scripts/roo shell curl ...` so it runs at the tunnel IP):
+  `./roo shell curl ...` so it runs at the tunnel IP):
   - response headers: `Server`, `X-Powered-By`, `X-Generator`, `X-AspNet-Version`
   - cookies as framework tells: `PHPSESSID`, `JSESSIONID`, `laravel_session`,
     `csrftoken` (Django), `ci_session` (CodeIgniter)
@@ -61,14 +61,14 @@ especially for web apps, before looking anything up.
 CPEs the buckaroo now captures):
 
 ```bash
-scripts/roo vulns <target>            # e.g. scripts/roo vulns 10.10.10.5
+./roo vulns <target>            # e.g. ./roo vulns 10.10.10.5
 ```
 
 **Ad-hoc** for a single product/version (no recon dir needed):
 
 ```bash
-scripts/roo vulns box --product nginx --version 1.18.0
-scripts/roo vulns box --cpe cpe:/a:openbsd:openssh:8.9p1
+./roo vulns box --product nginx --version 1.18.0
+./roo vulns box --cpe cpe:/a:openbsd:openssh:8.9p1
 ```
 
 Useful flags: `--port tcp-80` (one port), `--min-bucket HIGH` (only chase PoCs for
@@ -76,7 +76,7 @@ high-severity), `--no-github/--no-msf/--no-searchsploit` (trim sources / rate-li
 pressure), `--refresh` (bypass the 24h cache).
 
 It writes `recon-results/<target>/vulns.md` (+ `vulns.json`, + per-port `vulns.md`)
-and streams KEV/HIGH hits live. `scripts/roo report <target>` folds the results into
+and streams KEV/HIGH hits live. `./roo report <target>` folds the results into
 the report's "Known vulnerabilities & exploits" section.
 
 ### 3. Triage — read the buckets, don't trust them blindly

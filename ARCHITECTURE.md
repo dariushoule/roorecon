@@ -183,7 +183,7 @@ the whole reason the sidecar exists.) See the README "Gotchas".
 
 1. **A new scanner/tool?** Add `docker/<tool>/Dockerfile` (minimal,
    `FROM debian:stable-slim`). If it needs raw sockets, add it to `_caps()`.
-   Drive it via `scripts/roo run <tool>` or a thin subcommand.
+   Drive it via `./roo run <tool>` or a thin subcommand.
 2. **A new operator capability** (listener type, proxy, forwarder)? It's almost
    certainly another *run-mode of `net-toolbox`* in the namespace — not a new
    image. Add the tool to `net-toolbox`, add a thin verb that runs it with

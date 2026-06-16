@@ -7,7 +7,7 @@
 #
 #   bhcollect <dc-ip> <user> <password> [output-dir]
 #
-# then view it:  scripts/roo bloodhound view <the-zip>
+# then view it:  ./roo bloodhound view <the-zip>
 DC="$1"; USER="$2"; PASS="$3"; OUT="${4:-.}"
 [ -n "$DC" ] && [ -n "$USER" ] && [ -n "$PASS" ] || {
     echo "usage: bhcollect <dc-ip> <user> <password> [out-dir]" >&2; exit 2; }
@@ -33,4 +33,4 @@ rusthound-ce -d "$DOMAIN" -u "$USER@$DOMAIN" -f "$FQDN" -i "$DC" -n "$DC" -k -z 
 rc=$?
 rm -f "$PWD/$USER.ccache"
 [ "$rc" -eq 0 ] || { echo "[!] rusthound-ce exited $rc" >&2; exit "$rc"; }
-echo "[+] done — zip in $OUT/ ;  view it:  scripts/roo bloodhound view <zip>"
+echo "[+] done — zip in $OUT/ ;  view it:  ./roo bloodhound view <zip>"

@@ -1,4 +1,0 @@
-#!/bin/sh
-# POSIX shim → the cross-platform Python CLI. Lets `scripts/roo <subcommand>`
-# work on Linux/macOS/Git-Bash. Windows/PowerShell uses scripts/roo.cmd.
-exec python3 "$(dirname "$0")/roo.py" "$@"

@@ -6,7 +6,7 @@ description: Recursive web directory and file brute-forcing (content discovery) 
 # Directory & content discovery
 
 Recursive content discovery against an authorized web service, driven by
-`scripts/roo dirbust` (gobuster + baked SecLists wordlists). gobuster has no
+`./roo dirbust` (gobuster + baked SecLists wordlists). gobuster has no
 native recursion — `roo` drives it breadth-first, re-running `dir` on each
 directory it finds, and streams every hit to the CLI as it lands.
 
@@ -24,8 +24,8 @@ bare IP — vhosts serve different content.
 ## Run it
 
 ```bash
-scripts/roo dirbust http://box.htb/                 # VPN: prefix ROO_NET=container:roorecon-vpn
-scripts/roo dirbust http://box.htb/app/ --depth 2   # start under a subpath
+./roo dirbust http://box.htb/                 # VPN: prefix ROO_NET=container:roorecon-vpn
+./roo dirbust http://box.htb/app/ --depth 2   # start under a subpath
 ```
 
 Output: `recon-results/<host>/dirbust.txt` (`status<TAB>url`) and `dirbust.log`
@@ -68,7 +68,7 @@ ends, so requests go where findings live:
 
 ## Interpreting hits
 
-- `200` → live content; fetch it (`scripts/roo shell curl …`) and read it.
+- `200` → live content; fetch it (`./roo shell curl …`) and read it.
 - `403` → exists but forbidden; try bypasses, or dirbust *into* it for children.
 - `301/302` → follow the target; trailing-slash redirects are real dirs.
 - `401` → auth-protected; note for credential reuse.

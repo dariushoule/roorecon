@@ -7,7 +7,7 @@ description: Persistent, shared reverse-shell catcher for authorized pentesting 
 
 A reverse-shell catcher that **both you (operator) and the agent can drive**, that
 **survives either of you dropping out**, and that does file **upload/download** out
-of the box. Driven by `scripts/roo catch`. The engine is **pwncat-cs** (platform
+of the box. Driven by `./roo catch`. The engine is **pwncat-cs** (platform
 detection + transfer commands) running inside a **tmux** session inside a detached,
 tunnel-bound `net-toolbox` container — so the listener sits at the tunnel IP and
 reverse shells come back over the VPN.
@@ -31,19 +31,19 @@ this skill is the handler, not the exploit.
 ## Use it
 
 ```bash
-scripts/roo catch up                 # listen on a random ephemeral port
-scripts/roo catch up 4444            # ...or a specific port (e.g. 443/53 if egress is filtered)
+./roo catch up                 # listen on a random ephemeral port
+./roo catch up 4444            # ...or a specific port (e.g. 443/53 if egress is filtered)
 ```
 `up` prints your **tunnel IP + the port**, plus paste-ready reverse-shell
 one-liners. Set one on the target (via your RCE); when it connects, pwncat catches
 it.
 
 ```bash
-scripts/roo catch attach             # YOU: drop into the shared session (detach: Ctrl-b d)
-scripts/roo catch send <cmd...>      # AGENT: run a command in the caught shell
-scripts/roo catch capture            # AGENT: print the current session output
-scripts/roo catch status             # is it up? + recent output
-scripts/roo catch down               # stop the catcher (teardown also sweeps it)
+./roo catch attach             # YOU: drop into the shared session (detach: Ctrl-b d)
+./roo catch send <cmd...>      # AGENT: run a command in the caught shell
+./roo catch capture            # AGENT: print the current session output
+./roo catch status             # is it up? + recent output
+./roo catch down               # stop the catcher (teardown also sweeps it)
 ```
 
 Multiple catchers can run at once (different ports); `attach`/`status`/`down` take
