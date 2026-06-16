@@ -110,6 +110,15 @@ with a one-line trigger so it isn't orphaned. See CLAUDE.md "Keep SKILL.md lean"
   `roorecon-*` containers remain — preserving loot (`recon-results/`) and the saved
   browser profile. Don't auto-commit; solo commits only when asked. Use for: "clean
   up", "shut down", "tear down", "wrap up", "stop everything", "we're done".
+- **retro** → `.claude/skills/retro/SKILL.md`
+  The learning loop. Reads an engagement's operator↔agent interactions back and
+  proposes durable improvements to the skills/runbooks/`roo` CLI — refine skills,
+  extract runbooks, prune box-specific dead weight, suggest new skills/tools, fix
+  where the agent tripped. **Proposal-first** (operator approves the changeset, applied
+  on a branch), disciplined about *generic over box-specific* and not over-fitting to
+  one run (cross-engagement memory in `docs/retro-log.md`). Run before **teardown**,
+  while transcript + artifacts are warm. Use for: "retro", "debrief", "what did we
+  learn", "improve the skills", "capture lessons".
 
 ## Containerized tooling (convention)
 

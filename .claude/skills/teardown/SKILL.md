@@ -9,6 +9,11 @@ Bring everything down in the right order, leave the working tree clean, and keep
 loot. This is the end-of-session counterpart to recon: it stops what's running and
 tidies scratch, without throwing away results or the operator's work.
 
+> **Capture lessons before you tear down.** Teardown shuts down infra; it does not
+> learn anything. If the engagement surfaced friction worth folding back into the
+> skills, run the **retro** skill *first* — while the transcript and `recon-results/`
+> are still warm — then tear down.
+
 ## Principles
 
 - **Preserve the loot.** Never delete `recon-results/` (recon, vuln-research,

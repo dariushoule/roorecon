@@ -213,6 +213,15 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   Playwright MCP scratch (`.playwright-mcp/`) out of the tree, and verifies no
   `roorecon-*` containers remain — while preserving loot (`recon-results/`) and the
   saved browser profile. Triggers on "clean up", "shut down", "tear down", "wrap up".
+- **retro** (`.claude/skills/retro/SKILL.md`) — the learning loop. Reads an
+  engagement's operator↔agent interactions back and proposes durable improvements to
+  the skills/runbooks/`roo` CLI: refine skills, extract runbooks, prune box-specific
+  dead weight, suggest new skills/tools, and fix where the agent tripped. Edits the
+  source of truth, so it's **proposal-first** (operator approves the changeset, applied
+  on a branch) and disciplined about *generic over box-specific* and not over-fitting
+  to one run (it keeps a cross-engagement memory in `docs/retro-log.md`). Run it before
+  **teardown**, while transcript + artifacts are warm. Triggers on "retro", "debrief",
+  "what did we learn", "improve the skills", "capture lessons".
 
 ## Ground rules
 
