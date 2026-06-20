@@ -1,6 +1,7 @@
 # Scan output / loot — never commit target data
 recon-results/
 loot/
+exploit/
 *.nmap
 *.gnmap
 *.xml
@@ -30,3 +31,4 @@ __pycache__/
 *.pyo
 # Kerberos ccaches (tickets = secrets)
 *.ccache
+

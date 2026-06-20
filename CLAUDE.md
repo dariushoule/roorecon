@@ -21,6 +21,7 @@ Unix/macOS or `.\roo` from PowerShell/cmd (or just `roo` with the repo root on
 
 ```bash
 ./roo run <tool> [args...]          # e.g. ./roo run nmap -sCV -p- <t>
+./roo pyrun [--py V] [--pip "pkgs"] <script> [args...]  # exploit runner: pinned python:V-slim, tunnel-aware, deps cached
 ./roo sweep <target>                # streaming parallel TCP+UDP discovery
 ./roo buckaroo <target> <proto> <port>   # per-port enum + hostname discovery
 ./roo vhost <ip> <domain>           # vhost (Host-header) enum, internal IP
@@ -48,6 +49,17 @@ Unix/macOS or `.\roo` from PowerShell/cmd (or just `roo` with the repo root on
 SecLists wordlists are baked into the gobuster image (DNS/subdomain for
 `vhost`/`dns`, Web-Content for `dirbust`); each verb defaults to a fast list,
 override with `--wordlist <name|host-path>` or `$ROO_WORDLIST`.
+
+**Engagement scratch is organized *by target, not by runtime.*** Per-box exploit
+scripts and custom inputs (payloads, wordlists, CSVs) go in
+`recon-results/<target>/exploit/` — co-located with that box's facts/notes/report/
+loot, git-ignored, self-contained. *How* a script runs (net-toolbox via
+`roo shell`, or a pinned container via `./roo pyrun`) is metadata for its
+header/shebang, not a reason to split the tree. Keep `.roo/` for machine-managed
+runtime only (catch downloads, browser profile, MCP scratch) — **teardown** wipes
+it, so don't author exploits there. A reusable *technique* (not the box-specific
+instance) graduates to a tracked runbook under the relevant skill
+(`<skill>/runbooks/<technique>.md`).
 
 `roo` builds `docker/<tool>/Dockerfile` on demand (tagged by a hash of the tool's
 whole build context — Dockerfile + any COPY'd files) and runs it with the cwd

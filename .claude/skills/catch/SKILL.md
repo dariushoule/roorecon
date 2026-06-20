@@ -40,14 +40,27 @@ it.
 
 ```bash
 ./roo catch attach             # YOU: drop into the shared session (detach: Ctrl-b d)
+./roo catch enter              # AGENT: drop into the target PTY (do this once a shell lands)
 ./roo catch send <cmd...>      # AGENT: run a command in the caught shell
 ./roo catch capture            # AGENT: print the current session output
 ./roo catch status             # is it up? + recent output
 ./roo catch down               # stop the catcher (teardown also sweeps it)
 ```
 
-Multiple catchers can run at once (different ports); `attach`/`status`/`down` take
-an optional port to pick one. `send`/`capture` assume a single catcher.
+**`enter` first, or `send` talks to the wrong thing.** pwncat boots at its own
+**local** command prompt (`(local) pwncat$`), so a fresh `send <cmd>` is parsed by
+*pwncat*, not the target (you'll see `error: <cmd>: unknown command`). `./roo catch
+enter` sends Ctrl-D to toggle into the target's PTY (`(remote) user@host$`); after
+that `send`/`capture` drive the real shell. `enter` toggles — run it again to pop
+back to the local prompt (e.g. for `upload`/`download`). `capture` shows the current
+prompt, so check it if a `send` looks like it went nowhere.
+
+Multiple catchers can run at once (different ports); `attach`/`enter`/`status`/`down`
+take an optional port to pick one. `send`/`capture` can't (the rest is the command) —
+select one with `ROO_CATCH_PORT=<port>`, and otherwise they assume a single catcher.
+Sweep strays first (`roo catch down` / the **teardown** skill): a leftover catcher
+from a past session makes `send`/`capture` ambiguous, and a port typed into `send`
+positionally is swallowed into the command, not used to pick.
 
 ## Shared-session etiquette (don't fight the operator)
 
@@ -63,9 +76,9 @@ using:
 
 ## Upload / download (pwncat)
 
-Inside the session, pwncat's local prompt (Ctrl-D toggles remote shell ↔ local
-prompt) gives `upload` and `download`, which **auto-pick a transfer method** based
-on the target's platform (curl/wget/base64/…):
+`upload` and `download` are **pwncat local-prompt** commands (run `./roo catch
+enter` to toggle back from the target PTY to `(local) pwncat$`). They **auto-pick a
+transfer method** based on the target's platform (curl/wget/base64/…):
 
 - **download** (target → host): lands in **`.roo/catch/`** on the host by default
   (git-ignored, host-visible). Override the local name with a second argument.

@@ -119,6 +119,14 @@ redirects to `box.htb` → add to hosts → find `admin.box.htb`" loop.
    Both stream hits live and default to a fast wordlist; pass
    `--wordlist combined_subdomains.txt` (baked, thorough) or
    `ROO_WORDLIST=<host path>` for a custom list.
+   - **Theme the wordlist on the stack when you know it.** If fingerprinting
+     reveals what the app *is* (an ML platform, a k8s/CI cluster, a dev shop), a
+     short technology-themed guess list often beats the generic top-N — the
+     interesting vhost is named after the tooling, not a dictionary word. E.g. an
+     ML app → `ml, mlflow, mlops, models, registry, train, predict, jupyter,
+     airflow, minio, …`; CI/CD → `jenkins, gitlab, gitea, registry, argo, …`.
+     Write the list to a file and pass `ROO_WORDLIST=<path>`. Generic top-5000
+     coming back empty is the cue to switch, not to conclude "no vhosts."
 4. **Loop.** Add newly-found names to `./hosts` and re-buckaroo their web ports
    with the right Host — new vhosts often expose new content and more names.
 
