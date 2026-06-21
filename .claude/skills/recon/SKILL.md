@@ -178,6 +178,9 @@ has which tool."
   - FTP (21) → anonymous login, writable dirs.
   - SSH (22) → note version for the CVE lookup and for credential reuse later.
   - DB ports (3306/5432/1433/27017/6379) → default creds, unauth access.
+  - **AWS-shaped API** (STS/S3/SQS/IAM error XML, `x-amz-*` headers, a
+    `/latest/meta-data/` IMDS, a LocalStack/moto/`:4566` backend) → the **cloud**
+    skill: SSRF→IMDS creds → IAM-free backend vs enforcing gateway → `./roo aws`.
 - **Map versions to known vulns/PoCs** with `./roo vulns <target>` (the
   **vuln-research** skill) — it ranks CVEs by exploitability and finds public
   exploits. Run it once services are fingerprinted.

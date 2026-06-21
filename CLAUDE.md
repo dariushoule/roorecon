@@ -28,6 +28,7 @@ Unix/macOS or `.\roo` from PowerShell/cmd (or just `roo` with the repo root on
 ./roo dns <domain>                  # DNS subdomain enum, external domain
 ./roo dirbust <url>                 # recursive directory/file brute (SecLists)
 ./roo sqlmap [args...]              # automated SQL injection detection + exploitation (target-facing)
+./roo aws <service> <op> ...        # AWS CLI vs AWS or an AWS-compatible mock endpoint (tunnel-aware)
 ./roo fingerprint <url>             # web tech/version detection (whatweb), sharper than nmap
 ./roo vulns <target>                # CVE + public-PoC lookup for fingerprints (keyless)
 ./roo recon <target>                # simple one-shot phased scan
@@ -176,6 +177,17 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   sharpens web versions first. Runs post-fingerprint in recon and standalone.
   **CVE lookups egress on the public internet, never the VPN — don't prefix
   `roo vulns` with `ROO_NET`** (only `fingerprint` is target-facing).
+- **cloud** (`.claude/skills/cloud/SKILL.md`) — cloud-emulator / AWS-mock attack
+  path. Recon hands off here on an AWS-shaped endpoint (STS/S3/SQS/IAM, a
+  `/latest/meta-data/` IMDS, a LocalStack/moto/`:4566` backend), or start here with
+  an access key in hand. Drives **`./roo aws`** (containerized AWS CLI passthrough,
+  tunnel-aware) through the genre's arc: SSRF→IMDS creds → map the IAM-enforcing
+  gateway vs IAM-free backend → **permission-oracle** enumeration (not name-guessing)
+  → abuse a service (queue→worker, CodeBuild privileged-container→host, ECS/EKS/Lambda
+  exec, emulator→`docker.sock`). Carries the gateway-vs-backend split, the AKID-only-auth
+  test, and the "verify the sink actually runs (native-image dead features)" footgun;
+  deep service-abuse mechanics in its `service-abuse` runbook. Hashes/creds hand off to
+  **hashcat**/**ad**; identify+read the emulator's source via **vuln-research**.
 - **browse** (`.claude/skills/browse/SKILL.md`) — companion web browsing.
   `./roo browser [url]` launches a host Chrome routed through the VPN SOCKS
   proxy with a CDP debug port; the agent attaches via the **Playwright MCP**
