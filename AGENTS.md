@@ -61,6 +61,13 @@ with a one-line trigger so it isn't orphaned. See CLAUDE.md "Keep SKILL.md lean"
   versions first. CVE lookups hit the public internet, **never the VPN** — don't
   prefix `roo vulns` with `ROO_NET`. Use for: "CVE", "known vulnerabilities",
   "exploits for X", "is X vulnerable", "public PoC", "searchsploit".
+- **cloud** → `.claude/skills/cloud/SKILL.md`
+  Cloud-emulator / AWS-mock attack path. Drives `./roo aws` (containerized AWS CLI,
+  tunnel-aware) through the genre's arc: SSRF→IMDS creds → IAM-enforcing gateway vs
+  IAM-free backend → permission-oracle enumeration → service abuse (queue→worker,
+  CodeBuild privileged-container→host, ECS/EKS/Lambda exec, emulator→`docker.sock`).
+  Deep mechanics in `runbooks/service-abuse.md`. Use for: "AWS", "IMDS", "metadata
+  service", "LocalStack/moto", "cloud creds", "I have an access key".
 - **browse** → `.claude/skills/browse/SKILL.md`
   Companion web browsing: `./roo browser [url]` launches a host browser
   routed through the VPN (SOCKS) with a CDP port; the agent attaches via the
@@ -135,6 +142,7 @@ PowerShell/cmd (or just `roo` with the repo root on `PATH`). Subcommands:
 ./roo dns <domain>                  # DNS subdomain enum, external domain
 ./roo dirbust <url>                 # recursive directory/file brute (SecLists)
 ./roo sqlmap [args...]              # automated SQL injection detection + exploitation (target-facing)
+./roo aws <service> <op> ...        # AWS CLI vs AWS or an AWS-compatible mock endpoint (tunnel-aware)
 ./roo fingerprint <url>             # web tech/version detection (whatweb)
 ./roo vulns <target>                # CVE + public-PoC lookup (keyless; not tunneled)
 ./roo recon <target>                # simple one-shot phased scan

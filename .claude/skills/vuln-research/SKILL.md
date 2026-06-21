@@ -131,6 +131,34 @@ Fold whatever you find back into the triage and the report's
 freeform finding changes the picture (a confirmed-exploitable bug, a backport that
 clears a CVE), say so explicitly in your summary to the operator.
 
+### 5. Going deeper on an OSS target — clone the version, run it locally
+
+When the target is a **known open-source product** (an emulator, a web framework, a
+server) and a CVE search isn't enough, the source *is* the exploit research — and you
+can reach it even when the box can't.
+
+- **An "unknown" product/version that looks fake may be real.** A banner that reads like
+  a LocalStack theme, or a version string that seems made-up, can be a genuine fork/alt
+  with its *own* CVEs and behavior. **First search the name → find the upstream repo →
+  clone the exact tag → read the handler.** (Treating a genuine OSS project as a cosmetic
+  "theme" can cost hours of applying the wrong project's CVEs to the wrong code.)
+- **Reproduce it locally to read suppressed errors.** *You* can reach Docker Hub / GitHub
+  even when the box is network-isolated. If the target returns an **opaque 500 / generic
+  error** (stack suppressed), pull the **published image at the exact version** and run it
+  locally, replay the request, and read `docker logs` for the real stack trace:
+  ```
+  docker pull <org>/<image>:<version>
+  docker run -d --name rig -p <port>:<port> [-v /var/run/docker.sock:/var/run/docker.sock] <org>/<image>:<version>
+  # replay the request against localhost, then:
+  docker logs rig
+  ```
+  This turns a multi-turn guessing game into a one-line root cause (e.g. a feature that's
+  *present in source but dead in the native-image build* — every call throws on a missing
+  bundled resource → 500). The local instance is also a **safe rig** to validate exploit
+  ideas and read behavior *before* firing at the box.
+- A reusable *technique* you confirm this way graduates to a runbook under the relevant
+  skill (e.g. the **cloud** skill's `service-abuse` runbook), not into box notes.
+
 ## What gets written
 
 - `recon-results/<target>/vulns.md` + `vulns.json` — ranked aggregate.

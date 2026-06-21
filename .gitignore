@@ -2,6 +2,7 @@
 recon-results/
 loot/
 exploit/
+scratch/
 *.nmap
 *.gnmap
 *.xml

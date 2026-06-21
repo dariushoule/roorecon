@@ -982,6 +982,57 @@ def cmd_sqlmap(args):
     sys.exit(r.returncode)
 
 
+# --- subcommand: aws (AWS CLI against a mock/real endpoint) ------------------
+def cmd_aws(args):
+    """AWS CLI passthrough for AWS / AWS-compatible APIs (honors ROO_NET).
+
+    Targets the public AWS API by default, or any endpoint that speaks the AWS
+    protocol (STS/S3/SSM/SQS/...) when $ROO_AWS_ENDPOINT points elsewhere. A thin
+    passthrough to `aws` that wires up the engagement specifics for you:
+      - injects --endpoint-url from $ROO_AWS_ENDPOINT (skip if you pass your own),
+      - injects --region from $AWS_DEFAULT_REGION/$AWS_REGION (default us-east-1),
+      - supplies creds by forwarding any AWS_* vars in your environment and/or
+        $ROO_AWS_ENV, an env file of KEY=VAL lines (e.g. recovered STS creds),
+      - mounts ./hosts so a custom endpoint host resolves and honors $ROO_NET so it
+        can reach an endpoint that's only routable through the tunnel.
+
+    Enumerate the principal's permissions first — don't guess resource names:
+      ROO_AWS_ENV=<creds.env> ./roo aws sts get-caller-identity
+      ... ./roo aws ssm describe-parameters
+      ... ./roo aws secretsmanager list-secrets
+      ... ./roo aws sqs list-queues
+      ... ./roo aws s3api list-objects-v2 --bucket <name>
+    """
+    require_docker()
+    ref = ensure_image("aws")
+    rest = list(args.args or [])
+    if not rest:
+        rest = ["help"]
+    injected = []
+    ep = os.environ.get("ROO_AWS_ENDPOINT")
+    if ep and not any(a == "--endpoint-url" or a.startswith("--endpoint-url=") for a in rest):
+        injected += ["--endpoint-url", ep]
+    region = (os.environ.get("AWS_DEFAULT_REGION")
+              or os.environ.get("AWS_REGION") or "us-east-1")
+    if not any(a == "--region" or a.startswith("--region=") for a in rest):
+        injected += ["--region", region]
+    # Creds: forward AWS_* from the host env, plus an optional KEY=VAL env file.
+    # These are extra `docker run` flags (-e / --env-file) injected before the
+    # image, so they ride in via the same hook custom mounts use.
+    extra = []
+    for k in sorted(os.environ):
+        if k.startswith("AWS_"):
+            extra += ["-e", k]
+    env_file = os.environ.get("ROO_AWS_ENV")
+    if env_file:
+        p = Path(env_file)
+        if not p.exists():
+            die(f"ROO_AWS_ENV points to a missing file: {env_file}")
+        extra += ["--env-file", str(p.resolve())]
+    r = _docker_run("aws", ref, injected + rest, tty=True, extra_mounts=extra)
+    sys.exit(r.returncode)
+
+
 # --- subcommand: vol (offline memory forensics via volatility3) -------------
 # Memory-image analysis is offline loot processing — like hashcat, it never
 # touches the target or the VPN. It runs volatility3 (+ pypykatz, strings) in a
@@ -2246,6 +2297,12 @@ def build_parser():
     psql.add_argument("args", nargs=argparse.REMAINDER,
                       help="arguments passed straight to sqlmap (e.g. -u URL --cookie ... --dump)")
     psql.set_defaults(func=cmd_sqlmap)
+
+    paws = sub.add_parser("aws",
+                          help="AWS CLI against AWS or an AWS-compatible endpoint (honors ROO_NET)")
+    paws.add_argument("args", nargs=argparse.REMAINDER,
+                      help="arguments passed straight to aws (e.g. sts get-caller-identity)")
+    paws.set_defaults(func=cmd_aws)
 
     pvol = sub.add_parser("vol", help="offline memory forensics via volatility3 (creds/artifacts from a dump)")
     pvol.add_argument("image", help="path to a memory image under cwd (.vmem/.dmp/.raw/hiberfil/lsass dump)")
