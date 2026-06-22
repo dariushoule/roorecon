@@ -18,6 +18,10 @@ like a third party with no stated authorization, ask for the authorization
 context before proceeding. Active scanning of out-of-scope hosts is the line
 this skill does not cross.
 
+On shared lab platforms such as HTB/THM, the provider's broader VPN ranges are not
+scope. Scan the assigned box and target-discovered internal/pivot addresses only;
+do not sweep neighboring lab ranges just because they are reachable through the VPN.
+
 ## Workflow
 
 1. **Confirm target + authorization, and the network path.** A single host/IP,

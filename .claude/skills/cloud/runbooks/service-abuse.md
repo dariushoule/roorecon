@@ -26,6 +26,12 @@ the worker pulls a job and runs a field of it.
   exec field*, not the network.
 - Long jobs get killed at the worker's `timeout` — `os.fork()` + `os.setsid()` to detach
   a child (reverse shell, long scan) so it outlives the parent.
+- Once the queue RCE is proven, standardize a **per-engagement harness** under
+  `recon-results/<target>/exploit/`: one helper that submits the exact job schema,
+  writes output to an object store or other in-band channel, and chunks/polls the
+  result. Keep this local to the engagement unless the queue schema and exfil path are
+  genuinely generic; most "run a job" wrappers are box-specific glue, not a durable
+  `roo` command.
 
 ## Build/CI (CodeBuild) → privileged container → host root
 The strongest planted primitive: a build service that honors an **attacker-controlled
@@ -42,6 +48,31 @@ The strongest planted primitive: a build service that honors an **attacker-contr
   from `describe_tasks` (`stoppedReason`) or the build's CloudWatch logs — that
   distinguishes *image-missing* (`failed to resolve reference … docker.io … i/o timeout`)
   from *present-but-nonroot* (permission denied) from *present-root-win*.
+- **Map image reality, not the filename.** If source ships multiple Dockerfiles, inspect
+  the publish workflow to learn which Dockerfile built the tag you are using (`latest`
+  may be a native/UBI image while a nearby JVM Dockerfile is Alpine). Then cheaply probe
+  the actual cached image before designing the escape: `/etc/os-release`, `uname -m`,
+  `/bin/sh` target, `ENTRYPOINT`, default `USER`, `PATH`, and available tools. This
+  catches false assumptions like "sh is BusyBox ash", "mount exists", or "the image
+  runs as root".
+- **Entrypoint root drops are sometimes bypassable without a new image.** If an
+  entrypoint decides whether to `gosu`/`su-exec` based on shell command output
+  (`id -u`, `whoami`, etc.), and the image's `/bin/sh` is Bash or otherwise imports
+  shell functions, an exported function such as `BASH_FUNC_id%%='() { echo 1001; }'`
+  can make the check skip the drop while the process remains real uid 0. Verify the
+  shell first; this does not apply to BusyBox `ash`. Prefer this kind of narrow
+  override to broad `PATH` tricks, which are brittle on usrmerge images and can hide
+  support binaries the entrypoint needs.
+- **Minimal images may be privileged but tool-poor.** Native/Graal/UBI micro images can
+  have full caps and block devices but no `mount`, `nsenter`, Python, Perl, Java, or
+  compiler. Inventory first; if the primitive is real, stage a small static helper
+  through an already-reachable in-band path (object store, queue worker, internal HTTP)
+  and fetch it from inside the build. Avoid target-side internet pulls on isolated labs.
+- **Inspect existing mounts before guessing disks.** A device may already be mounted
+  into the container only as narrow bind-backed paths (`/app/data`, `/etc/hosts`, etc.).
+  Read `/proc/mounts`, `/proc/self/mountinfo`, and `/proc/partitions`; then try typed
+  mount variants (`-t ext4`, `rw` vs `ro,noload`) rather than treating one failed
+  `mount /dev/sdaN` as proof the privileged path is dead.
 - **Delivering your own image** is the hard part on an isolated box — see the
   image-delivery footgun in `SKILL.md`. Treat it as a rabbit hole; exhaust *present*
   images and non-image primitives first.
