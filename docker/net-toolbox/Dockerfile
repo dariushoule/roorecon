@@ -73,6 +73,15 @@ ENV PIPX_HOME=/opt/pipx \
 # build deps (build-essential, *-dev) are needed to compile native extensions
 # for NetExec's deps and the gssapi gem evil-winrm pulls in; kept in the image
 # (not purged) so a `pipx`/`gem` re-run by an operator doesn't break.
+#
+# Rust toolchain: NetExec pulls deps (e.g. a Rust-backed crypto/parser wheel)
+# that ship no prebuilt arm64 wheel, so pip builds them from source and needs a
+# Rust compiler — without it the install dies with "can't find Rust compiler".
+# Install via rustup (Debian stable's cargo is too old for current crates) and
+# put cargo on PATH so the pipx builds below can find it.
+ENV PATH=/opt/cargo/bin:$PATH \
+    RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ncat netcat-traditional socat \
@@ -83,6 +92,7 @@ RUN apt-get update \
       ruby ruby-dev \
       build-essential libffi-dev libssl-dev libkrb5-dev \
       git curl wget iproute2 unzip tmux less vim-tiny ca-certificates \
+ && curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal \
  && pip3 install --no-cache-dir --break-system-packages impacket \
  && pipx install git+https://github.com/Pennyw0rth/NetExec \
  && pipx install certipy-ad \
@@ -91,6 +101,8 @@ RUN apt-get update \
  && pipx install bloodhound \
  && pipx install bloodhound-ce \
  && gem install --no-document evil-winrm \
+ && ln -sf "$(find /usr/lib -name libfaketimeMT.so.1 | head -1)" \
+           /opt/libfaketimeMT.so.1 \
  && rm -rf /var/lib/apt/lists/*
 
 # pwncat-cs (0.5.4, last released 2023) predates Python 3.12: it calls the removed

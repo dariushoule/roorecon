@@ -85,6 +85,13 @@ with a one-line trigger so it isn't orphaned. See CLAUDE.md "Keep SKILL.md lean"
   rockyou). Identify the hash → mode (`-m`) via hashcat's example-hashes wiki, then
   wordlist→rules→mask. The **ad** skill hands roasts here. Use for: "help me crack
   this hash", "crack this NTLM/NetNTLMv2/kerberoast hash", "what hashcat mode".
+- **wordlists** → `.claude/skills/wordlists/SKILL.md`
+  Pick + fetch the right SecLists list on demand. `./roo wordlist search <kw>`
+  browses the repo by filename; `./roo wordlist get <repo-path>` caches one; tools
+  consume it via `--wordlist seclists:<path>` (gobuster) or `/work/.roo/wordlists/
+  <name>` (`roo run ffuf -w`). Baked gobuster/ffuf lists are the fast path; the
+  rest is pull-on-demand without rebaking. Use for: "which wordlist", "find a
+  wordlist", "seclists", "api/parameter/fuzz wordlist", "pull down a bigger list".
 - **memforensics** → `.claude/skills/memforensics/SKILL.md`
   Offline memory-image forensics. `./roo vol <image> creds` runs volatility3's
   credential trifecta (SAM hashdump + LSA secrets + cached domain creds) over a
@@ -158,7 +165,7 @@ PowerShell/cmd (or just `roo` with the repo root on `PATH`). Subcommands:
 ./roo ip                            # print the tunnel IP (your LHOST)
 ./roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
 ./roo hashcat [args...]             # GPU password cracking on the HOST (auto-installs)
-./roo wordlist [name]               # fetch a SecLists password list (default rockyou)
+./roo wordlist <search|get|name>    # browse/fetch any SecLists list on demand (passwords default)
 ./roo tools <list|builds|get|installed|rm> [name]  # prebuilt Windows tools → off-host /tools (prefers main builds)
 ```
 

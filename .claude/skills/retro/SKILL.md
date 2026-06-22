@@ -142,9 +142,10 @@ and an impact×confidence rating. The five types and the discipline each demands
 3. Write the per-engagement record to `recon-results/<target>/retro.md` (git-ignored —
    it may name specifics): what happened, the inventory, what was applied, what was
    deferred.
-4. Update `docs/retro-log.md` (git-tracked, generic only): append the N=1 / deferred
-   items so a future retro can confirm a pattern, and tick off anything this run
-   resolved. This file is the loop's memory — step 1 reads it back.
+4. Update `docs/retro-log.md` (git-ignored / private to the checkout; keep it generic
+   anyway): append the N=1 / deferred items so a future retro can confirm a pattern,
+   and tick off anything this run resolved. This file is the loop's memory — step 1
+   reads it back.
 
 ## Where each kind of lesson goes (routing)
 

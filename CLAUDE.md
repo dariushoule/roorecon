@@ -44,12 +44,15 @@ Unix/macOS or `.\roo` from PowerShell/cmd (or just `roo` with the repo root on
 ./roo ip                            # print the tunnel IP (your LHOST)
 ./roo fwd <port> [--stop]           # bridge a tunnel port to a host listener
 ./roo hashcat [args...]             # GPU password cracking on the HOST (auto-installs)
-./roo wordlist [name]               # fetch a SecLists password list (default rockyou)
+./roo wordlist <search|get|name>    # browse/fetch any SecLists list on demand (passwords default)
 ```
 
-SecLists wordlists are baked into the gobuster image (DNS/subdomain for
-`vhost`/`dns`, Web-Content for `dirbust`); each verb defaults to a fast list,
-override with `--wordlist <name|host-path>` or `$ROO_WORDLIST`.
+SecLists wordlists are baked into the gobuster/ffuf images (DNS/subdomain for
+`vhost`/`dns`, Web-Content for `dirbust`/`ffuf`); each verb defaults to a fast
+list, override with `--wordlist <name|host-path|seclists:<repo-path>>` or
+`$ROO_WORDLIST`. Anything not baked is pulled on demand — `roo wordlist search
+<kw>` to find a list, `roo wordlist get <repo-path>` to cache it (see the
+**wordlists** skill). The whole repo is available without rebaking an image.
 
 **Engagement scratch is organized *by target, not by runtime.*** Per-box exploit
 scripts and custom inputs (payloads, wordlists, CSVs) go in
@@ -74,8 +77,10 @@ limit), then re-run. Don't retag/alias base images or edit Dockerfiles to dodge
 it — `roo` prints this hint on a rate-limited build.
 
 **Which box has which tool (don't guess).** `roo run <tool>` works *only* for
-tools with a `docker/<tool>/Dockerfile` (`nmap`, `gobuster`) — `roo run curl …`
-fails, there's no such image. Ad-hoc clients (curl, wget, nc, socat, dig,
+tools with a `docker/<tool>/Dockerfile` (`nmap`, `gobuster`, `ffuf`) — `roo run
+curl …` fails, there's no such image. (`ffuf` complements `gobuster`: it fuzzes a
+`FUZZ` keyword *inside* a request body/header/param — e.g. an SSRF `url=` — and
+filters on the response, which `gobuster dir` can't.) Ad-hoc clients (curl, wget, nc, socat, dig,
 smbclient, ldapsearch, impacket) and the AD attack tooling (`nxc`/NetExec,
 `bloodyAD`, `certipy`, `evil-winrm` + `evil-winrm-py`, BloodHound collectors —
 incl. `rusthound-ce` wrapped by the one-command `bhcollect` for hardened DCs —
@@ -208,6 +213,15 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   type → mode (`-m`) against hashcat's example-hashes wiki, then runs a
   wordlist→rules→mask ladder. The **ad** skill hands roasts (Kerberoast/AS-REP/
   NetNTLMv2) here. Triggers on "help me crack this hash".
+- **wordlists** (`.claude/skills/wordlists/SKILL.md`) — pick + fetch the right
+  SecLists list on demand. `./roo wordlist search <kw>` browses the whole repo by
+  filename, `./roo wordlist get <repo-path>` caches one to `.roo/wordlists/`, and
+  tools consume it via `--wordlist seclists:<path>` (gobuster `dirbust`/`vhost`/
+  `dns`) or `/work/.roo/wordlists/<name>` (`roo run ffuf -w`). The baked
+  gobuster/ffuf lists stay the fast path; everything else is pull-on-demand
+  without rebaking an image. Carries the task→list-family table and "start small,
+  widen on a miss" judgment. Triggers on "which wordlist", "find a wordlist",
+  "seclists", "api/parameter/fuzz wordlist", "pull down a bigger list".
 - **memforensics** (`.claude/skills/memforensics/SKILL.md`) — offline memory-image
   forensics. `./roo vol <image> creds` runs volatility3's credential trifecta
   (SAM hashdump + LSA secrets + cached domain creds) over a local RAM dump / VM
@@ -251,6 +265,19 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
 
 - **Authorized targets only.** Everything here is for CTF boxes, lab ranges, or
   systems in a signed engagement scope. Confirm scope before active scanning.
+- **Stay within usage-policy bounds, and keep authorization explicit.** This repo
+  is for *authorized* security testing — keep that context attached so the work is
+  correctly recognized as legitimate. Name the engagement (CTF box, lab range,
+  signed scope) and describe actions by their assessment goal ("read root.txt to
+  prove the privesc", "recover the user hash to demonstrate the SQLi") rather than
+  in real-world-harm terms ("exfiltrate the data", "deploy ransomware", "evade
+  their EDR"). Some categories are out of bounds regardless of authorization and
+  this repo does not do them: denial-of-service / resource exhaustion, destructive
+  or self-propagating payloads (wipers, worms), mass or indiscriminate targeting,
+  supply-chain compromise, and detection-evasion whose purpose is to defeat a real
+  defender. If a task seems to need one of those, stop and reframe toward the
+  assessment objective or ask the operator. The aim is to be genuinely in-bounds —
+  not to strip context to push a request through.
 - **Enumerate before exploiting.** Skills produce a map and a plan; the operator
   approves the actual attacking steps.
 - **Tools run in containers, full stop.** No native-binary fallback — if Docker

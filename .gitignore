@@ -33,3 +33,4 @@ __pycache__/
 # Kerberos ccaches (tickets = secrets)
 *.ccache
 
+retro-log.md

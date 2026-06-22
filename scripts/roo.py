@@ -615,10 +615,14 @@ def _resolve_wordlist(w, default=DEFAULT_WORDLIST):
     """Return (container_path, extra_mounts) for a wordlist selector.
 
     Selector may be a baked name (e.g. combined_subdomains.txt) or an absolute
-    /wordlists path -> used as-is; or a host file path -> mounted into the image.
+    /wordlists path -> used as-is; a `seclists:<repo-path>` selector -> fetched on
+    demand (cached) and mounted; or a host file path -> mounted into the image.
     Falls back to $ROO_WORDLIST, then the caller's default.
     """
     w = w or os.environ.get("ROO_WORDLIST") or default
+    if w.startswith("seclists:"):  # pull any SecLists list on demand, then mount
+        p = _fetch_seclists(w[len("seclists:"):])
+        return "/wordlists/_custom", _bind(p, "/wordlists/_custom", readonly=True)
     p = Path(w)
     if p.is_file():  # a host path -> mount it in
         return "/wordlists/_custom", _bind(p, "/wordlists/_custom", readonly=True)
@@ -1595,6 +1599,16 @@ def cmd_hashcat(args):
 SECLISTS_RAW = os.environ.get(
     "ROO_SECLISTS_RAW",
     "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords")
+# Repo root (any SecLists path) + the git-tree API for browsing. `roo wordlist`
+# fetches *password* lists for the host cracker (legacy) AND, via search/get, any
+# list in the repo on demand — content-discovery, API, params, subdomains,
+# payloads — cached to .roo/wordlists and mountable into tools as seclists:<path>.
+SECLISTS_REPO_RAW = os.environ.get(
+    "ROO_SECLISTS_REPO_RAW",
+    "https://raw.githubusercontent.com/danielmiessler/SecLists/master")
+SECLISTS_TREE_API = os.environ.get(
+    "ROO_SECLISTS_TREE_API",
+    "https://api.github.com/repos/danielmiessler/SecLists/git/trees/master?recursive=1")
 WORDLISTS = {
     "rockyou": "Leaked-Databases/rockyou.txt.tar.gz",
     "darkweb2017-top10000": "darkweb2017-top10000.txt",
@@ -1607,8 +1621,117 @@ def _wordlist_cache():
     return Path(".roo") / "wordlists"
 
 
+def _human_size(n):
+    n = float(n)
+    for unit in ("B", "K", "M", "G"):
+        if n < 1024 or unit == "G":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024
+
+
+def _seclists_tree():
+    """Return [(path, size), …] of every blob in SecLists, cached to .roo.
+
+    The recursive git-tree is ~2 MB / thousands of entries; cache it so repeated
+    searches don't burn the unauth GitHub rate limit (60/hr). Delete the cache
+    file to force a refresh."""
+    cache = _wordlist_cache()
+    cache.mkdir(parents=True, exist_ok=True)
+    tf = cache / ".seclists-tree.json"
+    if not (tf.is_file() and tf.stat().st_size > 0):
+        info("fetching SecLists file index (one-time, cached)…")
+        req = urllib.request.Request(SECLISTS_TREE_API, headers={
+            "User-Agent": "roo/1.0", "Accept": "application/vnd.github+json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+        except (urllib.error.URLError, OSError) as e:
+            die(f"could not fetch SecLists index: {e} (GitHub rate limit? retry later)")
+        tf.write_bytes(data)
+    try:
+        tree = json.loads(tf.read_bytes()).get("tree", [])
+    except ValueError:
+        tf.unlink(missing_ok=True)
+        die("SecLists index cache was corrupt — re-run to refetch")
+    return [(e["path"], e.get("size", 0)) for e in tree if e.get("type") == "blob"]
+
+
+def _fetch_seclists(rel):
+    """Download a SecLists repo-relative path (e.g. Discovery/Web-Content/raft-
+    medium-words.txt) into .roo/wordlists, cached, unpacking .tar.gz. Returns the
+    local Path. Shared by `roo wordlist get` and the seclists:<path> resolver."""
+    rel = rel.lstrip("/")
+    cache = _wordlist_cache()
+    cache.mkdir(parents=True, exist_ok=True)
+    fname = rel.split("/")[-1]
+    is_tgz = fname.endswith(".tar.gz")
+    # Flatten the repo path into the cache name so same-basename lists from
+    # different dirs (e.g. several common.txt) don't collide.
+    flat = rel[:-7] if is_tgz else rel
+    out = cache / flat.replace("/", "__")
+    if out.is_file() and out.stat().st_size > 0:
+        return out
+    url = f"{SECLISTS_REPO_RAW}/{rel}"
+    info(f"fetching {rel}")
+    tmp = cache / fname.replace("/", "__")
+    try:
+        _download(url, tmp)
+    except (urllib.error.URLError, OSError) as e:
+        die(f"download failed: {e} — check the path (`roo wordlist search <kw>`)")
+    if is_tgz:
+        info("unpacking .tar.gz")
+        try:
+            with tarfile.open(tmp) as tar:
+                member = next((m for m in tar.getmembers()
+                               if m.isfile() and m.name.endswith(".txt")), None)
+                if member is None:
+                    die("no .txt member inside the archive")
+                with tar.extractfile(member) as src, open(out, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        finally:
+            tmp.unlink(missing_ok=True)
+    else:
+        tmp.replace(out)
+    return out
+
+
 def cmd_wordlist(args):
-    """Fetch (and cache) a SecLists password wordlist for the host cracker."""
+    """Browse/fetch SecLists lists on demand; default = a password list for the
+    host cracker.
+
+      roo wordlist                 → fetch rockyou (legacy default)
+      roo wordlist <alias|path>    → fetch a password list (host cracker)
+      roo wordlist --list          → known password aliases
+      roo wordlist search <kw>     → find any list in the repo by filename
+      roo wordlist get <repo-path> → cache any list; feed tools as seclists:<path>
+    """
+    # search / get sub-verbs (general SecLists, any category)
+    if args.name == "search":
+        if not args.arg:
+            die("usage: roo wordlist search <keyword>  (e.g. api, lfi, subdomains)")
+        kw = args.arg.lower()
+        hits = [(p, s) for p, s in _seclists_tree() if kw in p.lower()]
+        # Prefer the discovery/fuzzing families; de-noise the long tail.
+        hits.sort(key=lambda ps: (not ps[0].startswith("Discovery/"), ps[0]))
+        if not hits:
+            info(f"no SecLists files match '{args.arg}'")
+            return
+        info(f"{len(hits)} match(es) for '{args.arg}' — fetch with `roo wordlist get <path>`:")
+        for p, s in hits[:50]:
+            print(f"  {_human_size(s):>6}  {p}")
+        if len(hits) > 50:
+            info(f"… {len(hits)-50} more (narrow the keyword)")
+        return
+    if args.name == "get":
+        if not args.arg:
+            die("usage: roo wordlist get <repo-path>  (from `roo wordlist search`)")
+        out = _fetch_seclists(args.arg)
+        info(f"ready: {out.resolve()}  ({_human_size(out.stat().st_size)})")
+        info(f"  dirbust/vhost/dns:  --wordlist seclists:{args.arg.lstrip('/')}")
+        info(f"  roo run ffuf -w:    /work/{out}")   # cwd mounts at /work in tool containers
+        print(str(out.resolve()))
+        return
+
     if args.list:
         info("known aliases (or pass any SecLists Passwords-relative path):")
         for k, v in WORDLISTS.items():
@@ -1823,7 +1946,11 @@ def cmd_shell(args):
     # — a container can't own a real wall clock (CLOCK_REALTIME isn't namespaced).
     # The timestamp file lives in the container's ephemeral /tmp, so each shell
     # starts on real time and you re-sync per session; no offset = libfaketime no-op.
-    LIBFAKETIME = "/usr/lib/x86_64-linux-gnu/faketime/libfaketimeMT.so.1"
+    # Stable arch-independent symlink created in net-toolbox's Dockerfile — the
+    # real lib sits in an arch-specific multiarch subdir (x86_64-linux-gnu vs
+    # aarch64-linux-gnu) that isn't on the default linker path, so hardcoding one
+    # arch's path silently breaks LD_PRELOAD on the other (Apple Silicon).
+    LIBFAKETIME = "/opt/libfaketimeMT.so.1"
     cmd += (["--network", f"container:{VPN_CONTAINER}",
              "-e", f"LD_PRELOAD={LIBFAKETIME}",
              "-e", "FAKETIME_TIMESTAMP_FILE=/tmp/.roo-faketime"]
@@ -2389,10 +2516,12 @@ def build_parser():
     phc.set_defaults(func=cmd_hashcat)
 
     pwl = sub.add_parser("wordlist",
-                         help="fetch a SecLists password wordlist for host hashcat (default rockyou)")
+                         help="browse/fetch SecLists on demand; default = a password list for hashcat")
     pwl.add_argument("name", nargs="?",
-                     help="alias (rockyou, …) or a SecLists Passwords-relative path")
-    pwl.add_argument("--list", action="store_true", help="list known aliases and exit")
+                     help="password alias/path (default rockyou); or 'search'/'get'")
+    pwl.add_argument("arg", nargs="?",
+                     help="for 'search': keyword; for 'get': a SecLists repo-relative path")
+    pwl.add_argument("--list", action="store_true", help="list known password aliases and exit")
     pwl.set_defaults(func=cmd_wordlist)
 
     pt = sub.add_parser("tools",
