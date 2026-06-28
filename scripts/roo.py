@@ -2067,7 +2067,8 @@ def cmd_catch(args):
         return
     if action == "status":
         ok(f"catcher {name} running — recent session output:")
-        subprocess.run(["docker", "exec", name, "tmux", "capture-pane", "-pt", "catch", "-S", "-40"])
+        # -J joins wrapped lines so long output (hashes, paths) isn't truncated to pane width
+        subprocess.run(["docker", "exec", name, "tmux", "capture-pane", "-pJt", "catch", "-S", "-40"])
         return
     if action == "send":
         if not rest:
@@ -2077,7 +2078,8 @@ def cmd_catch(args):
         info(f"sent to {name}: {cmdstr}   (read output with `roo catch capture`)")
         return
     if action == "capture":
-        subprocess.run(["docker", "exec", name, "tmux", "capture-pane", "-pt", "catch", "-S", "-200"])
+        # -J joins wrapped lines so long output (hashes, paths) isn't truncated to pane width
+        subprocess.run(["docker", "exec", name, "tmux", "capture-pane", "-pJt", "catch", "-S", "-200"])
         return
 
 

@@ -48,8 +48,12 @@ ENV PIPX_HOME=/opt/pipx \
 # Operator toolset for engagement-network work, in four groups:
 #  - ad-hoc clients you'd reach for at the tunnel IP: smbclient, ldapsearch,
 #    dig, curl/wget, nc/ncat/socat, ssh/scp (openssh-client + sshpass for
-#    non-interactive password auth and scp-ing loot/tools up to a foothold) —
-#    the "jump box" basics.
+#    non-interactive password auth and scp-ing loot/tools up to a foothold),
+#    and NFS clients: nfs-common (showmount/rpcinfo/mount.nfs — kernel mount,
+#    needs CAP_SYS_ADMIN) + libnfs-utils (nfs-ls/nfs-cp/nfs-cat/nfs-stat —
+#    *userspace*, no mount syscall/privileges, the reliable path in a container
+#    and on Docker Desktop; URL form `nfs://host/path[?version=4]`) — the
+#    "jump box" basics.
 #  - AD attack tooling: impacket example CLIs (secretsdump/GetUserSPNs/…),
 #    NetExec (nxc), Certipy (AD CS), bloodyAD (LDAP read/write that *seals* — reads
 #    DACLs and runs dMSA/BadSuccessor add/modify on signing-enforced DCs where the
@@ -86,6 +90,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ncat netcat-traditional socat \
       python3 python3-pip python3-dev pipx \
+      nfs-common libnfs-utils \
       smbclient ldap-utils libsasl2-modules-gssapi-mit dnsutils iputils-ping \
       openssh-client sshpass \
       krb5-user krb5-pkinit faketime rlwrap \

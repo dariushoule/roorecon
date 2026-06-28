@@ -159,6 +159,12 @@ has which tool."
   `run_in_background` and notify on completion, so just wait, or `Read` the spool
   (`recon-results/<target>/…` or the task output path). Never foreground-`sleep`
   to poll: the harness blocks chained `sleep` and it burns a turn regardless.
+- **Testing creds on a non-HTTP service with curl** (IMAP/POP3/SMTP/FTP) — don't read
+  `-w '%{http_code}'`; it's always `000` because the protocol isn't HTTP. Use curl's
+  **exit code** instead: `curl -s -k --url 'imaps://<t>/INBOX' --user 'u:p' -X 'EXAMINE
+  INBOX' >/dev/null 2>&1; echo $?` → `0` = auth OK, non-zero = auth/connect fail. Keep a
+  known-good login as a positive control. (Reused passwords across mail users are
+  common — spray a found password before assuming it's one user's.)
 
 ## Interpreting output
 
@@ -182,6 +188,12 @@ has which tool."
   - FTP (21) → anonymous login, writable dirs.
   - SSH (22) → note version for the CVE lookup and for credential reuse later.
   - DB ports (3306/5432/1433/27017/6379) → default creds, unauth access.
+  - **NFS (111 rpcbind + 2049)** → `./roo shell showmount -e <t>` to list exports,
+    then loot them with the *userspace* libnfs client — `./roo shell nfs-ls -R
+    nfs://<t>/<export>` and `nfs-cp nfs://<t>/<export>/<file> /work/recon-results/<t>/loot/`
+    — no kernel mount or privileges needed (the container-friendly path; just try it
+    rather than theorizing NFSv3-vs-v4). World-readable exports (`*`) often leak
+    onboarding docs / creds; note if an export is writable (no_root_squash → shell).
   - **AWS-shaped API** (STS/S3/SQS/IAM error XML, `x-amz-*` headers, a
     `/latest/meta-data/` IMDS, a LocalStack/moto/`:4566` backend) → the **cloud**
     skill: SSRF→IMDS creds → IAM-free backend vs enforcing gateway → `./roo aws`.

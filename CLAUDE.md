@@ -81,7 +81,8 @@ tools with a `docker/<tool>/Dockerfile` (`nmap`, `gobuster`, `ffuf`) — `roo ru
 curl …` fails, there's no such image. (`ffuf` complements `gobuster`: it fuzzes a
 `FUZZ` keyword *inside* a request body/header/param — e.g. an SSRF `url=` — and
 filters on the response, which `gobuster dir` can't.) Ad-hoc clients (curl, wget, nc, socat, dig,
-smbclient, ldapsearch, impacket) and the AD attack tooling (`nxc`/NetExec,
+smbclient, ldapsearch, impacket, plus NFS clients — `showmount`/`mount.nfs` and the
+userspace `nfs-ls`/`nfs-cp`/`nfs-cat` that need no kernel mount or privileges) and the AD attack tooling (`nxc`/NetExec,
 `bloodyAD`, `certipy`, `evil-winrm` + `evil-winrm-py`, BloodHound collectors —
 incl. `rusthound-ce` wrapped by the one-command `bhcollect` for hardened DCs —
 plus the `clocksync`/`krbconf`/`faketime`/`rlwrap` helpers) live in
@@ -182,6 +183,12 @@ proxy. Don't apt-install tools into the sidecar; add them to `net-toolbox`.
   sharpens web versions first. Runs post-fingerprint in recon and standalone.
   **CVE lookups egress on the public internet, never the VPN — don't prefix
   `roo vulns` with `ROO_NET`** (only `fingerprint` is target-facing).
+- **linux-privesc** (`.claude/skills/linux-privesc/SKILL.md`) — Linux local
+  privilege escalation. The post-foothold counterpart to **ad**: from any non-root
+  shell (often a service account), stabilise it (PTY/`catch`), then walk the enum
+  ladder — sudo/SUID/capabilities/cron/writable-files/**internal root services**/
+  credential-reuse/kernel — to find the one root-owned thing you can influence.
+  Hands cracked hashes to **hashcat**, service/kernel CVEs to **vuln-research**.
 - **cloud** (`.claude/skills/cloud/SKILL.md`) — cloud-emulator / AWS-mock attack
   path. Recon hands off here on an AWS-shaped endpoint (STS/S3/SQS/IAM, a
   `/latest/meta-data/` IMDS, a LocalStack/moto/`:4566` backend), or start here with

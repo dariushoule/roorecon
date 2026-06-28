@@ -61,6 +61,13 @@ with a one-line trigger so it isn't orphaned. See CLAUDE.md "Keep SKILL.md lean"
   versions first. CVE lookups hit the public internet, **never the VPN** — don't
   prefix `roo vulns` with `ROO_NET`. Use for: "CVE", "known vulnerabilities",
   "exploits for X", "is X vulnerable", "public PoC", "searchsploit".
+- **linux-privesc** → `.claude/skills/linux-privesc/SKILL.md`
+  Linux local privilege escalation — from a non-root foothold shell to root.
+  Stabilise the shell (PTY/`catch`), then enumerate sudo / SUID / capabilities /
+  cron / writable files / **internal root services** / credential reuse / kernel,
+  and exploit the weakest link. Hands hashes to **hashcat**, CVEs to
+  **vuln-research**. Use for: "privesc", "get root", "I have a shell now what",
+  "I'm www-data", "sudo -l", "SUID", "GTFOBins", "linpeas".
 - **cloud** → `.claude/skills/cloud/SKILL.md`
   Cloud-emulator / AWS-mock attack path. Drives `./roo aws` (containerized AWS CLI,
   tunnel-aware) through the genre's arc: SSRF→IMDS creds → IAM-enforcing gateway vs

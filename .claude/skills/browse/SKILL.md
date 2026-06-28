@@ -58,8 +58,25 @@ The operator is a person actively using this browser. Be a considerate co-driver
   found**, with the evidence (URL, snapshot excerpt, request).
 - **Hand control back** — leave the browser in a sane state; don't close the
   operator's tabs.
-- **Never enter credentials or solve CAPTCHAs for the operator.** Let *them* log in
-  / clear MFA; then you enumerate the authenticated app (you share their session).
+- **Don't enter the operator's real credentials or solve CAPTCHAs for them** by
+  default — let *them* log in / clear MFA, then you enumerate the shared session. (A
+  CTF/lab login where the operator hands you the creds and explicitly asks you to log
+  in is fine — that's a direct instruction, not stealing a human's password.)
+
+## File uploads & modal dialogs (footgun)
+
+A file-chooser modal — opened when something clicks an upload widget — **wedges the
+tab**: `browser_snapshot`/`browser_evaluate` error with "does not handle the modal
+state" until you resolve it. Two cases:
+
+- **You only need information** (versions, params, DOM) → don't click the uploader;
+  read the app's JS/state with `browser_evaluate`/`fetch` instead.
+- **You actually need to upload** (e.g. delivering an exploit file the operator built —
+  Playwright can't open a native OS dialog for the human) → satisfy the chooser with
+  `browser_file_upload` and the absolute path(s). Clicking an upload button can queue
+  **several** choosers; pass `[]` (empty) to `browser_file_upload` to cancel each
+  leftover one until the page is unblocked, then `snapshot` and click the form's real
+  submit button.
 
 ## What this is great for
 
